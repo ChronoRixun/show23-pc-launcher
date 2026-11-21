@@ -4,7 +4,7 @@
             "cards": {
                 "serverRunning": "Stop the local server and free ports 10000 and 10080 before importing.",
                 "title": "Cards",
-                "note": "Downloads the card list and missing pictures from the publisher’s public website to this PC. About 10 MB, a few minutes.",
+                "note": "Downloads the card list and missing pictures from the publisher’s public website to this PC. About 35 MB and 5 minutes.",
                 "none": "Special cards: not imported",
                 "imported": "Imported {{count}} cards on {{date}}",
                 "start": "Import special cards",
@@ -481,7 +481,7 @@
             "cards": {
                 "serverRunning": "Arrêtez le serveur local et libérez les ports 10000 et 10080 avant l’importation.",
                 "title": "Cartes",
-                "note": "Télécharge la liste des cartes et les images manquantes depuis le site public de l’éditeur vers ce PC. Environ 10 Mo et quelques minutes.",
+                "note": "Télécharge la liste des cartes et les images manquantes depuis le site public de l’éditeur vers ce PC. Environ 35 Mo et 5 minutes.",
                 "none": "Cartes spéciales : non importées",
                 "imported": "{{count}} cartes importées le {{date}}",
                 "start": "Importer les cartes spéciales",
@@ -952,7 +952,7 @@
             "cards": {
                 "serverRunning": "Detén el servidor local y libera los puertos 10000 y 10080 antes de importar.",
                 "title": "Cartas",
-                "note": "Descarga la lista de cartas y las imágenes que faltan del sitio web público del editor a este PC. Unos 10 MB y unos minutos.",
+                "note": "Descarga la lista de cartas y las imágenes que faltan del sitio web público del editor a este PC. Unos 35 MB y 5 minutos.",
                 "none": "Cartas especiales: sin importar",
                 "imported": "Se importaron {{count}} cartas el {{date}}",
                 "start": "Importar cartas especiales",
@@ -1423,7 +1423,7 @@
             "cards": {
                 "serverRunning": "Перед импортом остановите локальный сервер и освободите порты 10000 и 10080.",
                 "title": "Карточки",
-                "note": "Загружает список карточек и недостающие изображения с открытого сайта издателя на этот ПК. Около 10 МБ и несколько минут.",
+                "note": "Загружает список карточек и недостающие изображения с открытого сайта издателя на этот ПК. Около 35 МБ и 5 минут.",
                 "none": "Особые карточки не импортированы",
                 "imported": "Импортировано карточек: {{count}} ({{date}})",
                 "start": "Импортировать особые карточки",
