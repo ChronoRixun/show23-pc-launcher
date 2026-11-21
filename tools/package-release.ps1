@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory)] [string] $EmulatorLicense,
     [Parameter(Mandatory)] [string] $EmulatorCommit,
     [string] $ServerLicense,
-    [string] $PillowWheel
+    [string] $PillowWheel,
+    [string] $EmulatorNotices
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,6 +107,9 @@ $notices = [ordered] @{
     'miniz.txt' = (Join-Path $oss 'miniz\LICENSE')
     'rapidjson.txt' = (Join-Path $oss 'rapidjson\license.txt')
 }
+# The emulator's THIRD-PARTY-NOTICES.txt: licences of the libraries built into shadPS4.exe.
+if (!$EmulatorNotices) { $EmulatorNotices = Join-Path (Split-Path -Parent $EmulatorLicense) 'THIRD-PARTY-NOTICES.txt' }
+if (Test-Path -LiteralPath $EmulatorNotices) { $notices['emulator\THIRD-PARTY-NOTICES.txt'] = $EmulatorNotices }
 foreach ($notice in $notices.Values) { Get-Plain $notice $false | Out-Null }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
