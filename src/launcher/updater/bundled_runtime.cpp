@@ -27,7 +27,7 @@ namespace parts
             };
             return listed(id::emulator, "shadPS4.exe") && listed(id::server, "python/python.exe") &&
                 listed(id::server, "olserver.py") && listed(id::server, "roster_decode.py") &&
-                listed(id::server, "tables/ol-messages.csv") &&
+                listed(id::server, "card_import.py") && listed(id::server, "tables/ol-messages.csv") &&
                 std::ranges::any_of(runtime.manifests[index(id::server)]->files, [](const auto& file)
                 {
                     return file.path.starts_with("replies/");

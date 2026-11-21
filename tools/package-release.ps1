@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)] [string] $PythonEmbedZip,
     [Parameter(Mandatory)] [string] $EmulatorLicense,
     [Parameter(Mandatory)] [string] $EmulatorCommit,
-    [string] $ServerLicense
+    [string] $ServerLicense,
+    [string] $PillowWheel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +47,36 @@ function Copy-Tree([string] $From, [string] $To, [string] $Pattern = '*') {
 }
 function Save-Text([string] $Path, [string] $Text) { [IO.File]::WriteAllText($Path, $Text, $utf8) }
 function Digest($File) { (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant() }
+
+function Copy-PillowWheel([string] $Path, [string] $Abi, [string] $Vendor, [string] $License) {
+    $archive = [IO.Compression.ZipFile]::OpenRead((Get-Plain $Path $false).FullName)
+    try {
+        $entries = @{}
+        foreach ($entry in $archive.Entries) {
+            $name = $entry.FullName
+            if ($name.Length -gt 193 -or $name -cnotmatch '^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$' -or
+                $name -match '(^|/)\.|\.(/|$)|(^|/)(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\.|/|$)' -or
+                $name -notmatch '^(PIL|pillow-[0-9][A-Za-z0-9_.-]*\.dist-info)/' -or $entries.ContainsKey($name)) {
+                throw "Unexpected Pillow wheel entry: $name"
+            }
+            $entries[$name] = $entry
+        }
+        $licenses = @($entries.Keys -like 'pillow-*.dist-info/licenses/LICENSE')
+        if ($licenses.Count -ne 1 -or !$entries.ContainsKey('PIL/__init__.py') -or
+            !$entries.ContainsKey("PIL/_imaging.$Abi-win_amd64.pyd") -or
+            !$entries.ContainsKey("PIL/_webp.$Abi-win_amd64.pyd")) {
+            throw "Expected a Pillow wheel for $Abi Windows x64 with WebP support and its licence."
+        }
+        foreach ($entry in $entries.Values) {
+            $target = Join-Path $Vendor $entry.FullName
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $false)
+        }
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[$licenses[0]], $License, $false)
+    } finally {
+        $archive.Dispose()
+    }
+}
 
 $Emulator = (Get-Plain $Emulator $false).FullName
 if ([IO.Path]::GetFileName($Emulator) -ine 'shadPS4.exe') { throw 'Supply shadPS4.exe.' }
@@ -123,6 +154,12 @@ try {
     if (!(Test-Path -LiteralPath (Join-Path $runtime 'server\replies'))) { throw 'No reply XML files found.' }
     foreach ($entry in $archive.Entries) {
         [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $python $entry.FullName), $false)
+    }
+    if ($PillowWheel) {
+        $pythonTags = @($archiveNames.Keys | Where-Object { $_ -match '^python[0-9]+\._pth$' })
+        if ($pythonTags.Count -ne 1) { throw 'Could not identify the embedded Python ABI for the Pillow wheel.' }
+        $abi = 'cp' + ($pythonTags[0] -replace '^python|\._pth$')
+        Copy-PillowWheel $PillowWheel $abi (Join-Path $runtime 'server\vendor') (Join-Path $licenses 'pillow.txt')
     }
     $image = [IO.File]::ReadAllBytes((Join-Path $python 'python.exe'))
     if ($image.Length -lt 64 -or [BitConverter]::ToUInt16($image, 0) -ne 0x5a4d) { throw 'Invalid embedded runtime executable.' }

@@ -18,6 +18,8 @@ Build Release x64, then run the following with the release emulator, server file
 
 The output is `dist/show23-pc-0.1.0-win64.zip` with an adjacent checksum file. The server licence defaults to `LICENSE` in the parent of the supplied server directory. Use `-ServerLicense` to specify another location. The server must support self-contained certificate generation.
 
+Add `-PillowWheel $pillowWheel` to include a local Pillow wheel that matches the embedded Windows x64 Python ABI. This enables WebP conversion for imported PNG and JPEG card art.
+
 ## Build from source
 
 Use Windows x64, Visual Studio 2022 or its Build Tools with the Desktop development with C++ workload, Windows SDK and C++ ATL, Premake 5 with Visual Studio 2022 support, and PowerShell. Put `premake5.exe` on PATH or set `SHOW23_PREMAKE` to its full path. The generator obtains pinned dependency sources and the Chromium Embedded Framework (CEF) runtime, approximately 260 MB. Source snapshots also work from a plain source directory.
@@ -59,6 +61,8 @@ This is an unofficial fan project. It is not affiliated with Sony Interactive En
 ## Credits
 
 This launcher is adapted from [Ultimate Legends](https://github.com/ChronoRixun/ultimate-legends) by the same author. Ultimate Legends is a fork of the [CB Servers Launcher](https://github.com/CBServers/cb-launcher) by CB Servers (© 2026 CB Servers). Its foundation is the [XLabs Launcher](https://github.com/XLabsProject/launcher), originally developed by [momo5502](https://github.com/momo5502) and the XLabs team. The lead author also added the scope guard’s cancellation method.
+
+Releases built with `-PillowWheel` bundle Pillow under the MIT-CMU licence. Its full notices are in `LICENSES/pillow.txt` inside the portable archive.
 
 ## Licence
 

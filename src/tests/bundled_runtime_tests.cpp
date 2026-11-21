@@ -30,7 +30,8 @@ namespace
             install = root / "install";
             write(bundle / "manifests/runtime.txt", "0.1.0\n");
             part("emulator", "emulator", {"shadPS4.exe"});
-            part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py", "tables/ol-messages.csv", "replies/fixture.xml"});
+            part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py", "card_import.py",
+                "tables/ol-messages.csv", "replies/fixture.xml"});
             part("profile", "tools/profile", {"defaults.txt"});
             write(install / "data/profiles/default/user/save", "preserve");
         }
@@ -102,4 +103,13 @@ TEST(bundled_runtime_repairs_bad_hash_but_refuses_a_corrupt_bundle)
     const auto other = f.root / "other";
     CHECK(!parts::stage_bundled_runtime(f.bundle, other, "0.1.0"));
     CHECK(!fs::exists(other / "manifests/runtime.txt"));
+}
+
+TEST(bundled_runtime_requires_the_card_importer_in_the_manifest)
+{
+    fixture f;
+    f.part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py",
+        "tables/ol-messages.csv", "replies/fixture.xml"});
+    CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+    CHECK(!fs::exists(f.install / "manifests/runtime.txt"));
 }
