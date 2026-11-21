@@ -87,6 +87,7 @@
                             <div class="actions">
                                 <button type="button" class="btn btn-primary btn-lg" id="setup-open" data-autofocus data-view-target="setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-box"></use></svg><span id="setup-open-label" data-i18n="game.setup">Set up</span></button>
                                 <button type="button" class="btn btn-secondary btn-lg" id="play" disabled><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span data-i18n="game.play">Play</span></button>
+                                <button type="button" class="btn btn-primary" id="stop-play" hidden data-i18n="play.stop">Stop</button>
                                 <button type="button" class="btn btn-secondary" id="verify"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-shield"></use></svg><span data-i18n="game.verify">Verify Files</span></button>
                                 <button type="button" class="btn btn-ghost" id="remove-game-copy" hidden data-i18n="package.remove">Remove game copy</button>
                                 <button type="button" class="btn btn-secondary" id="mods" data-view-target="mods-panel"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-layers"></use></svg><span data-i18n="game.mods">Mods</span></button>
@@ -94,6 +95,10 @@
                         </div>
                     </header>
                     <div class="home-details">
+                        <section id="play-result" class="panel" aria-live="polite" hidden>
+                            <p id="play-result-text"></p>
+                            <pre id="play-result-log" class="log" hidden></pre>
+                        </section>
                         <p class="status-line" id="game-status" role="status" hidden></p>
                         <p class="status-line game-source-notice" id="game-source-notice" role="status" hidden></p>
                         <section id="game-verification" class="panel setup-checklist" aria-labelledby="game-verification-title" hidden>
@@ -274,6 +279,10 @@
                             <div class="set-row">
                                 <div><label for="offline" data-i18n="settings.offline">Offline mode</label><span class="set-help" data-i18n="settings.offlineHelp">Release checks and downloads are disabled after restarting in offline mode.</span></div>
                                 <input class="switch" type="checkbox" id="offline" role="switch">
+                            </div>
+                            <div class="set-row">
+                                <label for="fullscreen" data-i18n="play.fullscreen">Fullscreen</label>
+                                <input class="switch" type="checkbox" id="fullscreen" role="switch">
                             </div>
                             <div class="set-row" id="offline-status" hidden><span class="small faint" data-i18n="settings.offlineActive">Offline mode is active.</span><button type="button" class="btn btn-ghost btn-sm" id="restart-online"><span data-i18n="settings.restartOnline">Restart online</span></button></div>
                             <div class="set-row">

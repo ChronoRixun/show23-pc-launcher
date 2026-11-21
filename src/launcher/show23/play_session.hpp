@@ -1,0 +1,40 @@
+#pragma once
+
+#include "setup.hpp"
+
+#include <array>
+#include <chrono>
+#include <functional>
+
+namespace show23
+{
+    enum class play_phase { idle, checking, certificates, server, playing, stopping };
+
+    struct play_result
+    {
+        const char* message{};
+        std::uint32_t number{};
+        std::string log;
+    };
+
+    struct play_request
+    {
+        fs::path install;
+        fs::path base;
+        fs::path python;
+        fs::path server;
+        fs::path emulator;
+        bool fullscreen{};
+    };
+
+    struct play_options
+    {
+        std::array<std::uint16_t, 2> ports{10000, 10080};
+        std::chrono::milliseconds ready_timeout{std::chrono::seconds(60)};
+        std::function<bool()> stop;
+        std::function<void(play_phase)> phase;
+    };
+
+    const char* phase_name(play_phase phase);
+    play_result run_play(const play_request& request, const play_options& options);
+}

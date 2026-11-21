@@ -1,6 +1,7 @@
 #include <std_include.hpp>
 
 #include "cef/cef_ui.hpp"
+#include "commands/commands.hpp"
 #include "cef/cef_ui_handler.hpp"
 
 #include <utils/nt.hpp>
@@ -498,6 +499,17 @@ namespace cef
 
         if (message == WM_CLOSE && window == root_window)
         {
+            if (commands::play_active() && !GetPropA(window, "show23_closing"))
+            {
+                for (const auto& browser : browser_list)
+                {
+                    if (browser->GetHost()->GetWindowHandle() != window) continue;
+                    const auto frame = browser->GetMainFrame();
+                    if (frame) frame->ExecuteJavaScript("window.requestLauncherClose?.()", frame->GetURL(), 0);
+                    break;
+                }
+                return 0;
+            }
             // Mark closing so the teardown resize doesn't overwrite the saved placement.
             SetPropA(window, "show23_closing", reinterpret_cast<HANDLE>(1));
         }

@@ -25,12 +25,4 @@ namespace show23
         return utils::properties::load(property_keys::INSTALL) == path;
     }
 
-    step_result start_local_server(const fs::path&, const fs::path&)
-    {
-        return {status::not_implemented, "Starting the local server is not implemented in this version."};
-    }
-    step_result start_emulator(const fs::path&, const fs::path&)
-    {
-        return {status::not_implemented, "Starting the emulator is not implemented in this version."};
-    }
 }

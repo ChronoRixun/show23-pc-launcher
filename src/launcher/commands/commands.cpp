@@ -5,6 +5,7 @@
 #include "ui_commands.hpp"
 #include "cef/cef_ui.hpp"
 #include "show23/setup_run.hpp"
+#include "show23/play_session.hpp"
 #include "show23/unpacker.hpp"
 #include "updater/launcher_update.hpp"
 #include "updater/part_store.hpp"
@@ -49,10 +50,45 @@ namespace commands
             std::vector<show23::finding> findings;
         };
         task verify;
+        std::jthread verify_worker;
         bool setup_busy{};
         std::atomic_bool setup_canceled{};
         show23::setup_report setup_result;
         std::jthread setup_worker;
+        std::atomic<show23::play_phase> play_status{show23::play_phase::idle};
+        std::atomic_bool play_stop{};
+        show23::play_result last_play;
+        std::jthread play_worker;
+
+        bool runtime_worker_busy{};
+        std::optional<show23::fs::path> runtime_target;
+        bool runtime_verified{};
+        std::jthread runtime_worker;
+
+        void verify_runtime_for(const show23::fs::path& install)
+        {
+            if (runtime_worker_busy || runtime_target == install) return;
+            runtime_target = install;
+            runtime_verified = false;
+            runtime_worker_busy = true;
+            try
+            {
+                runtime_worker = std::jthread([install]
+                {
+                    bool verified{};
+                    try
+                    {
+                        verified = parts::stage_bundled_runtime(utils::properties::get_appdata_path(),
+                            install, launcher_update::running_version());
+                    }
+                    catch (...) {}
+                    std::lock_guard lock(verify.mutex);
+                    runtime_verified = verified;
+                    runtime_worker_busy = false;
+                });
+            }
+            catch (...) { runtime_worker_busy = false; }
+        }
 
         rapidjson::Value write_findings(const std::vector<show23::finding>& rows, rapidjson::Document::AllocatorType& allocator)
         {
@@ -191,6 +227,7 @@ namespace commands
             {
                 response.SetObject();
                 auto& a = response.GetAllocator();
+                response.AddMember("fullscreen", utils::properties::load(property_keys::FULLSCREEN) == "true", a);
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
                 response.AddMember("portable", utils::properties::is_portable(), a);
@@ -208,6 +245,8 @@ namespace commands
                 const auto value = string(request, "value");
                 if (key == "language" && (value == "en" || value == "fr" || value == "es" || value == "ru"))
                     utils::properties::store(property_keys::LANGUAGE, value);
+                else if (key == "fullscreen" && (value == "true" || value == "false"))
+                    utils::properties::store(property_keys::FULLSCREEN, value);
                 else if (key == "offline" && (value == "true" || value == "false"))
                 {
                     utils::properties::store(property_keys::OFFLINE_MODE, value);
@@ -269,7 +308,8 @@ namespace commands
             ui.add_command("restart-launcher-update", [](const auto&, rapidjson::Document& response)
             {
                 std::string error;
-                const auto success = launcher_update::restart(error);
+                const auto success = !play_active() && launcher_update::restart(error);
+                if (play_active()) error = "Stop the game before restarting the launcher.";
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("success", success, a);
@@ -324,7 +364,6 @@ namespace commands
         {
             ui.add_command("get-show23", [](const auto&, rapidjson::Document& response)
             {
-                const auto runtime = parts::installed();
                 const auto install = show23::install_folder();
                 response.SetObject();
                 auto& a = response.GetAllocator();
@@ -333,7 +372,12 @@ namespace commands
                 const auto missing = game.state == show23::record_state::invalid;
                 const auto updated = set_up && game.record->update.has_value();
                 const auto version = set_up ? (updated ? game.record->update->version : game.record->base.version) : std::string{};
-                response.AddMember("ready", set_up && parts::runtime_ready(runtime), a);
+                {
+                    std::lock_guard lock(verify.mutex);
+                    if (set_up && !setup_busy && !verify.busy && !play_active()) verify_runtime_for(*install);
+                    response.AddMember("checkingRuntime", set_up && runtime_worker_busy, a);
+                    response.AddMember("ready", set_up && runtime_target == install && runtime_verified, a);
+                }
                 response.AddMember("setUp", set_up, a);
                 response.AddMember("gameMissing", missing, a);
                 response.AddMember("installedCopy", game.record && game.record->installed, a);
@@ -362,7 +406,7 @@ namespace commands
                     string(value, "displayedUnpacker")
                 };
                 std::lock_guard lock(verify.mutex);
-                if (verify.busy || setup_busy)
+                if (verify.busy || setup_busy || runtime_worker_busy || play_active())
                 {
                     write_setup(response, setup_failure("check.busy"));
                     return;
@@ -423,39 +467,104 @@ namespace commands
             {
                 std::lock_guard lock(verify.mutex);
                 const auto install = show23::install_folder();
-                response.SetBool(!setup_busy && !verify.busy && install && show23::remove_game_copy(*install));
+                response.SetBool(!setup_busy && !verify.busy && !runtime_worker_busy && !play_active() && install && show23::remove_game_copy(*install));
             });
 
             ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)
             {
-                const auto runtime = parts::installed();
-                if (!parts::ready(runtime))
+                using enum show23::play_phase;
+                std::lock_guard lock(verify.mutex);
+                if (setup_busy || verify.busy || runtime_worker_busy || play_active())
                 {
-                    result(response, "Set up the game first.");
+                    response.SetBool(false);
                     return;
                 }
-                const auto install = *show23::install_folder();
-                const auto server = show23::start_local_server(install, parts::component_folder(runtime, parts::id::server));
-                if (server.state != show23::status::complete)
+                play_stop = false;
+                last_play = {};
+                play_status = checking;
+                try
                 {
-                    result(response, server.message);
-                    return;
+                    play_worker = std::jthread([]
+                    {
+                        show23::play_result outcome{"paths"};
+                        bool verified{};
+                        try
+                        {
+                            const auto install = show23::install_folder();
+                            const auto game = install ? show23::inspect_game(*install) : show23::game_presence{};
+                            if (install && game.state == show23::record_state::ready)
+                            {
+                                verified = parts::stage_bundled_runtime(utils::properties::get_appdata_path(),
+                                    *install, launcher_update::running_version());
+                                outcome = {"runtime"};
+                                if (verified)
+                                {
+                                    const auto runtime = parts::read_runtime(*install);
+                                    const auto server_folder = parts::component_folder(runtime, parts::id::server);
+                                    const auto emulator_folder = parts::component_folder(runtime, parts::id::emulator);
+                                    const show23::play_request request{*install, game.record->base.path,
+                                        server_folder / "python/python.exe", server_folder / "olserver.py",
+                                        emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true"};
+                                    show23::play_options options;
+                                    options.stop = [] { return play_stop.load(); };
+                                    options.phase = [](auto phase)
+                                    {
+                                        if (!play_stop.load()) play_status = phase;
+                                    };
+                                    outcome = show23::run_play(request, options);
+                                }
+                            }
+                        }
+                        catch (...) {}
+                        std::lock_guard completed(verify.mutex);
+                        runtime_verified = verified;
+                        last_play = play_stop.load() ? show23::play_result{"stopped"} : std::move(outcome);
+                        play_status = idle;
+                    });
+                    response.SetBool(true);
                 }
-                const auto emulator = show23::start_emulator(install, parts::component_folder(runtime, parts::id::emulator));
-                result(response, emulator.message);
+                catch (...)
+                {
+                    play_status = idle;
+                    last_play = {"paths"};
+                    response.SetBool(false);
+                }
+            });
+
+            ui.add_command("get-play", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("phase", rapidjson::StringRef(show23::phase_name(play_status.load())), a);
+                if (last_play.message) response.AddMember("result", rapidjson::StringRef(last_play.message), a);
+                response.AddMember("code", last_play.number, a);
+                response.AddMember("log", json(last_play.log, a), a);
+            });
+
+            ui.add_command("stop-play", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                const auto active = play_active();
+                if (active)
+                {
+                    play_stop = true;
+                    play_status = show23::play_phase::stopping;
+                }
+                response.SetBool(active);
             });
 
             ui.add_command("verify-show23", [](const auto&, rapidjson::Document& response)
             {
                 std::lock_guard lock(verify.mutex);
                 response.SetBool(false);
-                if (verify.busy || setup_busy) return;
+                if (verify.busy || setup_busy || runtime_worker_busy || play_active()) return;
                 verify.busy = true;
                 verify.message.clear();
                 verify.findings.clear();
                 try
                 {
-                    std::thread([]
+                    verify_worker = std::jthread([]
                     {
                         std::vector<show23::finding> findings;
                         try
@@ -468,13 +577,22 @@ namespace commands
                         }
                         catch (...) { findings.push_back({"verify.record", show23::finding_state::failed, {}}); }
                         std::string outcome;
-                        try { outcome = parts::verify_files(parts::installed()); }
+                        bool verified{};
+                        try
+                        {
+                            const auto install = show23::install_folder();
+                            if (install)
+                                verified = parts::stage_bundled_runtime(utils::properties::get_appdata_path(),
+                                    *install, launcher_update::running_version());
+                            outcome = parts::verify_files(parts::installed());
+                        }
                         catch (...) { outcome = "Could not verify the runtime files."; }
                         std::lock_guard finish(verify.mutex);
+                        runtime_verified = verified;
                         verify.message = std::move(outcome);
                         verify.findings = std::move(findings);
                         verify.busy = false;
-                    }).detach();
+                    });
                     response.SetBool(true);
                 }
                 catch (const std::exception&)
@@ -508,10 +626,19 @@ namespace commands
         return std::nullopt;
     }
 
-    void stop_setup()
+    bool play_active()
+    {
+        return play_status.load() != show23::play_phase::idle;
+    }
+
+    void stop_workers()
     {
         setup_canceled = true;
+        play_stop = true;
+        if (play_worker.joinable()) play_worker.join();
         if (setup_worker.joinable()) setup_worker.join();
+        if (runtime_worker.joinable()) runtime_worker.join();
+        if (verify_worker.joinable()) verify_worker.join();
     }
 
     void register_all_commands(cef::cef_ui& ui)

@@ -74,8 +74,14 @@ namespace commands::ui_commands
             }
         });
 
-        cef_ui.add_command("close", [&cef_ui](const auto&, auto&)
+        cef_ui.add_command("close", [&cef_ui](const auto& request, auto&)
         {
+            if (commands::play_active() && (!request.IsObject() || !request.HasMember("confirmed") ||
+                !request["confirmed"].IsTrue()))
+            {
+                cef_ui.execute_javascript("window.requestLauncherClose?.()");
+                return;
+            }
             // Mark closing first so the teardown resize doesn't overwrite the saved placement.
             if (auto* const window = cef_ui.get_window())
             {
@@ -137,6 +143,7 @@ namespace commands::ui_commands
                 response.AddMember("error", rapidjson::StringRef(code), allocator);
             };
 
+            if (commands::play_active()) { set_error("playing"); return; }
             const bool to_portable = request.IsObject() && request.HasMember("portable") &&
                                      request["portable"].IsBool() && request["portable"].GetBool();
             if (to_portable == utils::properties::is_portable())
@@ -218,6 +225,7 @@ namespace commands::ui_commands
         // Fresh process with no flags; the stored offline toggle decides the new mode.
         cef_ui.add_command("relaunch", [](const auto&, rapidjson::Document& response)
         {
+            if (commands::play_active()) { response.SetBool(false); return; }
             response.SetBool(true);
             utils::nt::relaunch_self("");
             utils::nt::terminate();
@@ -225,6 +233,7 @@ namespace commands::ui_commands
 
         cef_ui.add_command("relaunch-online", [](const auto&, rapidjson::Document& response)
         {
+            if (commands::play_active()) { response.SetBool(false); return; }
             response.SetBool(true);
             utils::properties::store(property_keys::OFFLINE_MODE, "false");
             utils::nt::relaunch_self(""); // empty args drops -offline

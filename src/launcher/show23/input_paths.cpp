@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstring>
+#include <memory>
 #include <atomic>
 #include <limits>
 #include <iterator>
@@ -142,6 +145,59 @@ namespace show23::input_paths
             value_ = std::exchange(other.value_, INVALID_HANDLE_VALUE);
         }
         return *this;
+    }
+
+    location ensure_directory(const fs::path& path)
+    {
+        auto directory = inspect(path, true);
+        if (directory.error != path_error::none || directory.present) return directory;
+        const auto relative = directory.path.lexically_relative(directory.existing);
+        auto current = directory.existing;
+        for (const auto& component : relative)
+        {
+            current /= component;
+            if (!CreateDirectoryW(extended(current).c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+                return {};
+            auto created = inspect(current);
+            if (created.error != path_error::none || !created.directory) return {};
+            directory = std::move(created);
+        }
+        return directory;
+    }
+
+    bool atomically_write(const location& parent, const fs::path& name, const std::string& text)
+    {
+        if (!parent.directory || parent.error != path_error::none) return false;
+        const auto path = parent.path / name;
+        {
+            const auto existing = inspect(path, true);
+            if (existing.error != path_error::none || existing.directory || existing.links > 1) return false;
+        }
+        static std::atomic_uint serial{};
+        const auto temp = parent.path / (L".show23-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                                  std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(++serial));
+        handle file(CreateFileW(extended(temp).c_str(), GENERIC_WRITE | DELETE, FILE_SHARE_DELETE, nullptr,
+                                CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        if (!file) return false;
+        DWORD written = 0;
+        const auto length = static_cast<DWORD>(text.size());
+        const bool flushed = WriteFile(file.get(), text.data(), length, &written, nullptr) && written == length &&
+            FlushFileBuffers(file.get());
+        if (flushed && [&]
+        {
+            const auto destination = extended(path);
+            const auto size = static_cast<DWORD>(offsetof(FILE_RENAME_INFO, FileName) + (destination.size() + 1) * sizeof(wchar_t));
+            auto storage = std::make_unique<char[]>(size);
+            auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.get());
+            rename->ReplaceIfExists = TRUE;
+            rename->RootDirectory = nullptr;
+            rename->FileNameLength = static_cast<DWORD>(destination.size() * sizeof(wchar_t));
+            std::memcpy(rename->FileName, destination.data(), rename->FileNameLength);
+            return SetFileInformationByHandle(file.get(), FileRenameInfo, rename, size) != FALSE;
+        }()) return true;
+        FILE_DISPOSITION_INFO remove{TRUE};
+        SetFileInformationByHandle(file.get(), FileDispositionInfo, &remove, sizeof(remove));
+        return false;
     }
 
     bool fixed_drive(const fs::path& path)

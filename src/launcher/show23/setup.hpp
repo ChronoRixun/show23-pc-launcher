@@ -15,8 +15,6 @@ namespace show23
     inline constexpr auto title_id = "CUSA35521";
 
     enum class source_kind { package, folder, automatic };
-    enum class status { complete, rejected, not_implemented };
-    struct step_result { status state; const char* message; };
 
     struct setup_request
     {
@@ -61,8 +59,4 @@ namespace show23
     std::optional<fs::path> install_folder();
     bool is_local_path(const fs::path& path);
     bool remember_install(const fs::path& install);
-    // Future return value includes the server process and its ready loopback endpoint.
-    step_result start_local_server(const fs::path& install, const fs::path& server_folder);
-    // Future return value includes an emulator process handle for coordinated shutdown.
-    step_result start_emulator(const fs::path& install, const fs::path& emulator_folder);
 }

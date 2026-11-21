@@ -43,6 +43,8 @@ namespace show23::input_paths
 
     std::wstring extended(const fs::path& path);
     std::optional<std::string> sha256(const location& file);
+    location ensure_directory(const fs::path& path);
+    bool atomically_write(const location& parent, const fs::path& name, const std::string& text);
     bool fixed_drive(const fs::path& path);
     location inspect(const fs::path& path, bool allow_missing = false, bool read_file = false);
     bool contains(const fs::path& directory, const fs::path& path);

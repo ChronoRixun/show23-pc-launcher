@@ -138,7 +138,7 @@ namespace
         cef_ui.create(path / "data" / "launcher-ui", "main.html");
 
         cef::cef_ui::work();
-        commands::stop_setup();
+        commands::stop_workers();
     }
 
     bool same_path(const std::filesystem::path& a, const std::filesystem::path& b)

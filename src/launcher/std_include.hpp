@@ -7,6 +7,7 @@
 #define NOMINMAX
 #endif
 
+#include <WinSock2.h>
 #include <Windows.h>
 #include <ShlObj.h>
 #include <dwmapi.h>

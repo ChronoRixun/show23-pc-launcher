@@ -1,6 +1,6 @@
 #pragma once
 
-#include "input_paths.hpp"
+#include "child_process.hpp"
 
 #include <functional>
 
@@ -16,7 +16,6 @@ namespace show23
     };
 
     unpacker_program find_unpacker(const fs::path& selected, const fs::path& bundled);
-    std::wstring quote_process_argument(std::wstring_view argument);
 
     struct extraction_result
     {

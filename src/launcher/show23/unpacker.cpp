@@ -1,11 +1,11 @@
 #include "std_include.hpp"
 #include "unpacker.hpp"
+#include "child_process.hpp"
 
 #include <utils/string.hpp>
 
 #include <array>
 #include <chrono>
-#include <cstddef>
 #include <set>
 
 namespace show23
@@ -56,60 +56,7 @@ namespace show23
             return match;
         }
 
-        bool stop_job(HANDLE job, HANDLE primary)
-        {
-            // Job accounting can reach zero before process objects become signaled
-            // and their file handles have closed. Capture wait handles before terminating.
-            std::vector<ULONG_PTR> storage(32);
-            std::vector<handle> members;
-            for (;;)
-            {
-                auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
-                if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, list,
-                    static_cast<DWORD>(storage.size() * sizeof(ULONG_PTR)), nullptr))
-                {
-                    for (DWORD i = 0; i < list->NumberOfProcessIdsInList; ++i)
-                    {
-                        handle member(OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(list->ProcessIdList[i])));
-                        if (member) members.push_back(std::move(member));
-                    }
-                    break;
-                }
-                if (GetLastError() != ERROR_MORE_DATA || storage.size() >= 65536) break;
-                storage.resize(storage.size() * 2);
-            }
 
-            if (!TerminateJobObject(job, 1) || WaitForSingleObject(primary, INFINITE) != WAIT_OBJECT_0) return false;
-            for (const auto& member : members)
-                if (WaitForSingleObject(member.get(), 5000) != WAIT_OBJECT_0) return false;
-            for (;;)
-            {
-                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION counts{};
-                if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &counts, sizeof(counts), nullptr))
-                    return false;
-                if (!counts.ActiveProcesses) return true;
-                Sleep(10);
-            }
-        }
-
-        struct process_attributes
-        {
-            std::vector<std::byte> storage;
-            LPPROC_THREAD_ATTRIBUTE_LIST list{};
-            ~process_attributes() { if (list) DeleteProcThreadAttributeList(list); }
-
-            bool init(std::array<HANDLE, 2>& inherited)
-            {
-                SIZE_T size{};
-                InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
-                storage.resize(size);
-                auto* ptr = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-                if (!InitializeProcThreadAttributeList(ptr, 1, 0, &size)) return false;
-                list = ptr;
-                return UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
-                                                 sizeof(inherited), nullptr, nullptr) != FALSE;
-            }
-        };
     }
 
     unpacker_program find_unpacker(const fs::path& selected, const fs::path& bundled)
@@ -147,22 +94,6 @@ namespace show23
         return program;
     }
 
-    std::wstring quote_process_argument(const std::wstring_view argument)
-    {
-        std::wstring quoted(1, L'"');
-        std::size_t slashes{};
-        for (const auto ch : argument)
-        {
-            if (ch == L'\\') { ++slashes; continue; }
-            quoted.append(ch == L'"' ? slashes * 2 + 1 : slashes, L'\\');
-            slashes = 0;
-            quoted += ch;
-        }
-        quoted.append(slashes * 2, L'\\');
-        quoted += L'"';
-        return quoted;
-    }
-
     extraction_result extract_package(const unpacker_program& program, const fs::path& package,
         const fs::path& output, const fs::path& log, const std::function<bool()>& cancel,
         const std::function<void(std::uint64_t, std::uint64_t)>& progress)
@@ -183,12 +114,6 @@ namespace show23
             FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
         if (!logfile) return {{}, "unpack.launch"};
 
-        handle job(CreateJobObjectW(nullptr, nullptr));
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if (!job || !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
-            return {{}, "unpack.launch"};
-
         SECURITY_ATTRIBUTES inherited{sizeof(inherited), nullptr, TRUE};
         HANDLE pipe_read{}, pipe_write{};
         if (!CreatePipe(&pipe_read, &pipe_write, &inherited, 0)) return {{}, "unpack.launch"};
@@ -196,34 +121,15 @@ namespace show23
         const handle no_input(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherited,
                                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
         if (!no_input) return {{}, "unpack.launch"};
-        STARTUPINFOEXW startup{};
-        startup.StartupInfo.cb = sizeof(startup);
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        startup.StartupInfo.hStdInput = no_input.get();
-        startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = writer.get();
-        std::array inherited_handles{writer.get(), no_input.get()};
-        process_attributes attributes;
-        if (!attributes.init(inherited_handles)) return {{}, "unpack.launch"};
-        startup.lpAttributeList = attributes.list;
-        const auto exe = program.file.path.native();
-        auto command = quote_process_argument(exe);
-        if (program.subfolder)  // ps4-pkg-tool: <package> <output folder>
-            command += L" " + quote_process_argument(input.path.native()) + L" " + quote_process_argument(dest.path.native());
-        else  // orbis-unpkg: extract <package> -o <base output folder>
-            command += L" extract " + quote_process_argument(input.path.native()) + L" -o " +
-                       quote_process_argument(dest.path.native());
-        PROCESS_INFORMATION process{};
-        if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, TRUE,
-            CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr,
-            dest.path.c_str(), &startup.StartupInfo, &process)) return {{}, "unpack.launch"};
-        handle child(process.hProcess), thread(process.hThread);
-        writer = {};
-        if (!AssignProcessToJobObject(job.get(), child.get()) || ResumeThread(thread.get()) == DWORD(-1))
-        {
-            TerminateProcess(child.get(), 1);
-            WaitForSingleObject(child.get(), INFINITE);
+        std::vector<std::wstring> args;
+        if (!program.subfolder) args.emplace_back(L"extract");
+        args.push_back(input.path.native());
+        if (!program.subfolder) args.emplace_back(L"-o");
+        args.push_back(dest.path.native());
+        child_process child;
+        if (!child.start(program.file.path, dest.path, args, no_input.get(), writer.get(), true))
             return {{}, "unpack.launch"};
-        }
+        writer = {};
 
         constexpr DWORD log_limit = 2 * 1024 * 1024;
         DWORD captured{};
@@ -254,9 +160,8 @@ namespace show23
         {
             drain();
             if (cancel && cancel()) { canceled = true; break; }
-            const auto status = WaitForSingleObject(child.get(), 50);
-            if (status == WAIT_OBJECT_0) break;
-            if (status != WAIT_TIMEOUT) return {{}, "unpack.launch"};
+            if (!child.running()) break;
+            Sleep(50);
             const auto now = clock::now();
             if (now >= next)
             {
@@ -271,12 +176,11 @@ namespace show23
                 progress(elapsed, written);
             }
         }
-        DWORD code{};
-        const auto exited = !canceled && GetExitCodeProcess(child.get(), &code);
-        if (!stop_job(job.get(), child.get())) return {{}, "unpack.launch"};
+        const auto code = child.exit_code();
+        if (!child.stop()) return {{}, "unpack.launch"};
         drain();
         if (canceled) return {{}, "unpack.canceled"};
-        if (!exited || code) return {{}, "unpack.exit", code};
+        if (!code || *code) return {{}, "unpack.exit", code.value_or(0)};
         if (entries(stage) != before_stage || entries(parent) != before_parent) return {{}, "unpack.outside"};
         const auto result = result_folder(dest.path, true);
         if (result.empty()) return {{}, "unpack.result"};

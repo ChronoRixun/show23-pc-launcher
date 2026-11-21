@@ -407,3 +407,40 @@ test('package setup passes the keep decision back to the installer', async () =>
     assert.equal(calls.length, 2);
     assert.equal(calls[1].payload.existingCopy, 'keep');
 });
+
+
+test('Play shows Playing and Stop drives the session to a result', async () => {
+    let played = false;
+    let stopped = false;
+    const view = open({
+        'get-show23': { ready: true, setUp: true, updated: true },
+        'play-show23': () => { played = true; return true; },
+        'stop-play': () => { stopped = true; return true; },
+        'get-play': () => stopped ? { phase: 'idle', result: 'stopped' } :
+            played ? { phase: 'playing' } : { phase: 'idle' }
+    });
+    await view.clock.advance(0);
+    assert.match(view.id('game-source-notice').textContent, /1\.00/);
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.equal(view.id('game-state').textContent, 'Playing');
+    assert.equal(view.id('stop-play').hidden, false);
+    view.id('stop-play').click();
+    await view.clock.advance(300);
+    assert.equal(view.id('stop-play').hidden, true);
+    assert.match(view.id('play-result-text').textContent, /stopped/i);
+});
+
+test('Play failure shows the diagnostic log in the result panel', async () => {
+    const view = open({
+        'get-show23': { ready: true },
+        'play-show23': true,
+        'get-play': { phase: 'idle', result: 'emulatorExit', code: 12, log: 'Wrong executable' }
+    });
+    await view.clock.advance(0);
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.equal(view.id('play-result').hidden, false);
+    assert.match(view.id('play-result-text').textContent, /12/);
+    assert.equal(view.id('play-result-log').textContent, 'Wrong executable');
+});

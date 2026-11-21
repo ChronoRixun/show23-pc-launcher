@@ -1,11 +1,9 @@
 #include "std_include.hpp"
 #include "part_store.hpp"
-#include "launcher_update.hpp"
 #include "show23/setup.hpp"
-#include "show23/game_record.hpp"
+#include "show23/input_paths.hpp"
 
-#include <utils/cryptography.hpp>
-#include <utils/properties.hpp>
+#include <format>
 
 namespace parts
 {
@@ -15,42 +13,21 @@ namespace parts
         // Files and folders in the install layout must remain on the selected local drive.
         std::string read_small(const fs::path& path, const std::uintmax_t limit)
         {
-            std::error_code ec;
-            if (!ordinary_path(path) || !fs::is_regular_file(path, ec)) return {};
-            const auto size = fs::file_size(path, ec);
-            if (ec || size == 0 || size > limit) return {};
-            std::string text(static_cast<std::size_t>(size), '\0');
-            std::ifstream stream(path, std::ios::binary);
-            if (!stream.read(text.data(), static_cast<std::streamsize>(text.size())) || stream.peek() != std::char_traits<char>::eof())
-                return {};
+            const auto file = show23::input_paths::inspect(path, false, true);
+            if (!file.present || file.directory || !file.length || file.length > limit ||
+                file.error != show23::input_paths::path_error::none) return {};
+            std::string text(static_cast<std::size_t>(file.length), '\0');
+            if (!show23::input_paths::read_at(file.pins.back().get(), 0, text)) return {};
             return text;
-        }
-
-        bool directory(const fs::path& path)
-        {
-            std::error_code ec;
-            return ordinary_path(path) && fs::is_directory(path, ec);
         }
 
         bool matches(const fs::path& file, const parts::file& expected)
         {
-            std::error_code ec;
-            if (!ordinary_path(file) || !fs::is_regular_file(file, ec) ||
-                fs::file_size(file, ec) != expected.size || ec) return false;
-            std::ifstream stream(file, std::ios::binary);
-            if (!stream) return false;
-            utils::cryptography::sha256::stream hash;
-            std::array<char, 64 * 1024> buffer;
-            std::uint64_t remaining = expected.size;
-            while (remaining)
-            {
-                const auto count = static_cast<std::streamsize>(std::min<std::uint64_t>(remaining, buffer.size()));
-                if (!stream.read(buffer.data(), count)) return false;
-                hash.update(buffer.data(), static_cast<std::size_t>(count));
-                remaining -= static_cast<std::uint64_t>(count);
-            }
-            return stream.peek() == std::char_traits<char>::eof() && !stream.bad() && hash.finish_hex() == expected.sha256;
+            const auto input = show23::input_paths::inspect(file, false, true);
+            return input.present && !input.directory && input.error == show23::input_paths::path_error::none &&
+                input.length == expected.size && show23::input_paths::sha256(input) == expected.sha256;
         }
+
     }
 
     bool ordinary_path(const fs::path& path, const bool allow_missing)
@@ -71,22 +48,10 @@ namespace parts
         return true;
     }
 
-    installed_runtime installed()
+    installed_runtime read_runtime(const fs::path& install)
     {
         installed_runtime result;
-        const auto launcher = utils::properties::get_appdata_path() / "data" / "launcher-release" / "launcher.json";
-        const auto local_launcher = read_small(launcher, 256 * 1024);
-        std::string parse_error;
-        if (!local_launcher.empty())
-        {
-            auto manifest = parse(local_launcher, parse_error);
-            if (manifest && manifest->part == id::launcher && manifest->version == launcher_update::running_version())
-                result.manifests[index(id::launcher)] = std::move(manifest);
-        }
-
-        const auto install = show23::install_folder();
-        if (!install) return result;
-        const auto manifests = *install / "manifests";
+        const auto manifests = install / "manifests";
         const auto selection = manifests / "runtime.txt";
         std::error_code ec;
         if (!fs::exists(fs::symlink_status(selection, ec)) && (!ec || ec == std::errc::no_such_file_or_directory))
@@ -99,7 +64,16 @@ namespace parts
             return result;
         }
 
-        result.root = *install / "runtime" / release;
+        return read_runtime(install, release);
+    }
+
+    installed_runtime read_runtime(const fs::path& install, const std::string& release)
+    {
+        installed_runtime result;
+        if (!is_version(release)) return result;
+        result.root = install / "runtime" / release;
+        const auto manifests = install / "manifests";
+        std::string parse_error;
         for (const auto part : all)
         {
             if (part == id::launcher) continue;
@@ -119,29 +93,12 @@ namespace parts
         return runtime.root / name(part);
     }
 
-    bool ready(const installed_runtime& runtime)
+    bool verify_runtime(const installed_runtime& runtime, const std::string_view launcher_version, std::string& message)
     {
-        const auto install = show23::install_folder();
-        return install && runtime_ready(runtime) && show23::inspect_game(*install).state == show23::record_state::ready;
-    }
-
-    bool runtime_ready(const installed_runtime& runtime)
-    {
-        if (runtime.root.empty() || !runtime.error.empty() ||
-            !compatibility_error(runtime.manifests, launcher_update::running_version()).empty()) return false;
-        for (const auto part : all)
-        {
-            if (part != id::launcher && (!runtime.manifests[index(part)] || !directory(component_folder(runtime, part)))) return false;
-        }
-        return true;
-    }
-
-    std::string verify_files(const installed_runtime& runtime)
-    {
-        if (!runtime.error.empty()) return runtime.error;
-        if (runtime.root.empty()) return "No active runtime to verify.";
-        const auto compatibility = compatibility_error(runtime.manifests, launcher_update::running_version());
-        if (!compatibility.empty()) return compatibility;
+        if (!runtime.error.empty()) { message = runtime.error; return false; }
+        if (runtime.root.empty()) { message = "No active runtime to verify."; return false; }
+        message = compatibility_error(runtime.manifests, launcher_version);
+        if (!message.empty()) return false;
 
         std::size_t checked = 0;
         std::size_t failed = 0;
@@ -150,7 +107,7 @@ namespace parts
         {
             if (part == id::launcher) continue;
             const auto& item = runtime.manifests[index(part)];
-            if (!item) return "A runtime manifest is missing.";
+            if (!item) { message = "A runtime manifest is missing."; return false; }
             const auto folder = component_folder(runtime, part);
             for (const auto& file : item->files)
             {
@@ -160,8 +117,9 @@ namespace parts
                 ++failed;
             }
         }
-        if (failed) return std::format("{} of {} runtime files failed verification (first: {}). Repair is not implemented in this version.",
-                                       failed, checked, first);
-        return std::format("Verified {} runtime files.", checked);
+        message = failed ? std::format("{} of {} runtime files failed verification (first: {}).", failed, checked, first) :
+            std::format("Verified {} runtime files.", checked);
+        return !failed;
     }
+
 }

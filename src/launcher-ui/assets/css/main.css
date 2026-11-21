@@ -505,3 +505,5 @@ svg.icon { width: 16px; height: 16px; }
 .stage.not-needed .stage-sub { color: var(--text-2); }
 .stage.not-needed::before { background: var(--accent); }
 .game-source-notice { overflow-wrap: anywhere; }
+
+#play-result-log { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

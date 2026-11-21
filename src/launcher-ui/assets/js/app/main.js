@@ -9,6 +9,7 @@
     const pages = { show23: 'show23-page', setup: 'setup', mods: 'mods-panel', settings: 'settings-page', support: 'support-page' };
     const state = {
         page: 'show23', settings: {}, game: {}, parts: {}, mods: null,
+        play: {}, followingPlay: false, followingRuntime: false, confirmingClose: false,
         sourceKind: 'folder', setupBusy: false, setupDetails: '', location: 'installed',
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
@@ -70,20 +71,27 @@
         const ready = !!game.ready;
         const setUp = ready || !!game.setUp;
         const missing = !!game.gameMissing;
-        $('game-state').textContent = t(ready ? 'game.ready' : setUp ? 'inPlace.gameSetUp' : missing ? 'inPlace.gameMissing' : 'game.notReady');
+        const phase = state.play.phase || 'idle';
+        const active = phase !== 'idle';
+        $('game-state').textContent = t(active ? 'play.' + phase : ready ? 'game.ready' : setUp ? 'inPlace.gameSetUp' : missing ? 'inPlace.gameMissing' : 'game.notReady');
         $('game-pill').className = setUp ? 'pill ok' : 'pill warn';
         $('game-state-dot').className = setUp ? 'dot ok' : 'dot warn';
         $('home-hero').classList.toggle('is-unset', !setUp);
         const sourceMessage = missing ? t(game.sourcePath ? 'inPlace.missingPath' : 'inPlace.invalidRecord', { path: game.sourcePath }) :
-            setUp && !ready ? t('inPlace.runtimeMissing') : '';
+            game.checkingRuntime ? t('play.runtimeChecking') :
+            setUp && !ready ? t('inPlace.runtimeMissing') : game.updated ? t('play.baseOnly') : '';
         status('game-source-notice', sourceMessage);
-        $('play').disabled = !ready;
-        $('remove-game-copy').hidden = !game.installedCopy;
+        $('play').disabled = !ready || active;
+        $('play').hidden = active;
+        $('stop-play').hidden = !active;
+        $('stop-play').disabled = phase === 'stopping';
+        $('verify').disabled = active || !!game.checkingRuntime;
+        $('remove-game-copy').hidden = !game.installedCopy || active;
         $('play').classList.toggle('btn-primary', ready);
         $('play').classList.toggle('btn-secondary', !ready);
-        if (ready) $('play').setAttribute('data-autofocus', '');
+        if (ready && !active) $('play').setAttribute('data-autofocus', '');
         else $('play').removeAttribute('data-autofocus');
-        $('setup-open').hidden = ready;
+        $('setup-open').hidden = active || !!game.checkingRuntime || (ready && !game.installedCopy);
         const setupLabel = setUp || missing ? 'inPlace.setUpAgain' : 'game.setup';
         $('setup-open-label').setAttribute('data-i18n', setupLabel);
         $('setup-open-label').textContent = t(setupLabel);
@@ -121,6 +129,17 @@
         state.game = await run('get-show23') || {};
         state.mods = null;
         paintHome();
+        if (state.game.checkingRuntime && !state.followingRuntime) {
+            state.followingRuntime = true;
+            try {
+                do {
+                    await sleep(250);
+                    state.game = await run('get-show23') || {};
+                    paintHome();
+                } while (state.game.checkingRuntime);
+                if (state.game.ready) await refreshParts();
+            } finally { state.followingRuntime = false; }
+        }
         if (state.game.ready) {
             const folder = state.game.folder;
             const result = await run('get-mods', { game: 'show23' });
@@ -416,6 +435,7 @@
         setRadio('location', state.location);
         $('switch-mode').disabled = (state.location === 'portable') === !!saved.portable;
         $('offline').checked = !!saved.offlineSaved;
+        $('fullscreen').checked = !!saved.fullscreen;
         $('offline-status').hidden = !saved.offline;
         $('check-parts').disabled = !!saved.offline || state.checking;
         window.__setMaximized(state.maximized);
@@ -692,6 +712,7 @@
             await followUpdates();
         });
         bind('switch-stable', 'click', stable);
+        bind('fullscreen', 'change', () => save('fullscreen', String($('fullscreen').checked)));
         bind('offline', 'change', async () => {
             const enable = $('offline').checked;
             if (!await save('offline', String(enable)) || enable === !!state.settings.offline) return;
@@ -708,6 +729,43 @@
         });
     }
 
+    function renderPlayResult() {
+        const current = state.play;
+        const message = current.result ? t('play.' + current.result, { code: current.code, port: current.code }) : '';
+        status('play-result-text', message);
+        status('play-result-log', current.log);
+        $('play-result').hidden = !message;
+    }
+
+    async function followPlay() {
+        if (state.followingPlay) return;
+        state.followingPlay = true;
+        try {
+            do {
+                state.play = await run('get-play') || {};
+                paintHome();
+                renderPlayResult();
+                if (!state.play.phase || state.play.phase === 'idle') break;
+                await sleep(250);
+            } while (true);
+            await gameState();
+        } finally { state.followingPlay = false; }
+    }
+
+    async function requestLauncherClose() {
+        if (state.confirmingClose) return;
+        state.confirmingClose = true;
+        try {
+            const play = await run('get-play');
+            if (play?.phase && play.phase !== 'idle') {
+                const choice = await window.showMessageBox(t('play.closeTitle'), t('play.closeBody'),
+                    [{ label: t('common.cancel'), cancel: true }, t('play.stopClose')]);
+                if (choice !== 1) return;
+                await run('close', { confirmed: true });
+            } else await run('close');
+        } finally { state.confirmingClose = false; }
+    }
+
     function wireControls() {
         bind('show23', 'click', () => returnHome());
         bind('settings', 'click', openSettings);
@@ -721,7 +779,8 @@
         });
         bind('minimize-button', 'click', () => run('minimize'));
         bind('maximize-button', 'click', () => run('toggle-maximize'));
-        bind('close-button', 'click', () => run('close'));
+        bind('close-button', 'click', requestLauncherClose);
+        window.requestLauncherClose = requestLauncherClose;
         window.__setMaximized = value => {
             state.maximized = !!value;
             const button = $('maximize-button');
@@ -730,8 +789,19 @@
         };
 
         bind('play', 'click', async () => {
-            const result = await run('play-show23');
-            status('game-status', result?.message);
+            if (state.followingPlay) return;
+            $('play').disabled = true;
+            if (!await run('play-show23')) {
+                state.play = { result: 'busy' };
+                paintHome();
+                renderPlayResult();
+                return;
+            }
+            await followPlay();
+        });
+        bind('stop-play', 'click', async () => {
+            if (await run('stop-play')) $('stop-play').disabled = true;
+            await followPlay();
         });
         bind('verify', 'click', verify);
         bind('mods', 'click', () => {

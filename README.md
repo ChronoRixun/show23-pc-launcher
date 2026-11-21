@@ -6,7 +6,17 @@ A Windows launcher for running your own copy of MLB The Show 23 with the compani
 
 ## Status
 
-Set up verifies an unpacked 1.00 base folder and an optional unpacked 1.21 update folder, then records their locations in the selected install folder. The game folders stay where they are. Package setup can use a supported external unpacker to install a separate game copy. Set up shows the program path and asks before running a player-selected executable for the first time. A package base and update must both be packages. An unpacked base and update must both be folders. Verify Files checks the recorded game folders and any installed runtime. Runtime installation, repair, and starting the server and emulator are pending, so setting up the game does not enable Play. Mods manages local content pack folders under `data/mods/`.
+Set up verifies an unpacked 1.00 base folder and an optional unpacked 1.21 update folder, then records their locations in the selected install folder. The game folders stay where they are. Package setup can use a supported external unpacker to install a separate game copy. Set up shows the program path and asks before running a player-selected executable for the first time. A package base and update must both be packages. An unpacked base and update must both be folders. Verify Files checks the recorded game folders and any installed runtime. A playable portable release stages and verifies its bundled runtime after setup. Play starts the local server and launches the 1.00 base game in local mode. Mods manages local content pack folders under `data/mods/`.
+
+## Package the playable release
+
+Build Release x64, then run the following with the release emulator, server files and local Windows x64 embeddable interpreter ZIP. Use the emulator licence and the exact commit used to build that executable.
+
+~~~powershell
+.\tools\package-release.ps1 -Version 0.1.0 -Emulator $emulator -Server $server -PythonEmbedZip $pythonZip -EmulatorLicense $emulatorLicense -EmulatorCommit $emulatorCommit
+~~~
+
+The output is `dist/show23-pc-0.1.0-win64.zip` with an adjacent checksum file. The server licence defaults to `LICENSE` in the parent of the supplied server directory. Use `-ServerLicense` to specify another location. The server must support self-contained certificate generation.
 
 ## Build from source
 
@@ -40,7 +50,7 @@ The launcher does not send game paths, game files, saves, content packs or diagn
 | `https://release-assets.githubusercontent.com/…` and `https://objects.githubusercontent.com/…` | When GitHub redirects a release asset download |
 | `https://github.com/ChronoRixun/show23-pc-launcher/releases/latest` | Opens in the default browser when requested from the updater |
 
-The embedded interface uses `http://show23-pc.invalid/` internally. CEF serves that origin from local files and native commands. The default browser and Windows handle their own networking, including certificate validation. The current launcher has no catalogue importer and does not start the local server. Use `-offline` at startup or enable **Offline mode** in Settings and restart to disable the launcher's release contacts.
+The embedded interface uses `http://show23-pc.invalid/` internally. CEF serves that origin from local files and native commands. The default browser and Windows handle their own networking, including certificate validation. Play starts the local server on 127.0.0.1. The launcher has no catalogue importer. Use `-offline` at startup or enable **Offline mode** in Settings and restart to disable the launcher's release contacts.
 
 ## Legal
 
