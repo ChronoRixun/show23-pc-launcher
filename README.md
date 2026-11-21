@@ -43,6 +43,10 @@ Without an import you have the Live roster cards from your game files, with play
 
 The import is optional and runs only when you press the button. It uses a website run by the publisher, so please be aware of that site's terms before you use it. Nothing is sent to this project.
 
+### Manual mode (no launcher)
+
+The portable release includes `manual/README.txt`. From the extracted folder, run `manual\setup.cmd <install> <base> [update]`, then `manual\play.cmd <install> [--fullscreen]`. On Linux, the shell wrappers use Python 3.10 or later and a separate Linux shadPS4 build from the emulator repository's `release` branch. Use unpacked game folders. The Windows launcher can adopt a manual Windows install later.
+
 ### Where your files are
 
 Inside your install folder:
@@ -64,7 +68,7 @@ Back up the whole `data\profiles` folder to keep your progress. The launcher's o
 - About 211 special cards are left out of the import because they could not be matched to a roster player.
 - Choice packs are not supported.
 - The launcher's self-update has not been tried against a real release yet. If it fails, download the new zip by hand.
-- Play uses game version 1.00 only. Windows only.
+- Play uses game version 1.00. The launcher and its bundled emulator target Windows.
 - You need your own legally obtained copy of the game. Nothing here contains game files or card art.
 
 ### Reporting problems

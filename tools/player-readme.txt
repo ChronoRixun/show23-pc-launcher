@@ -14,6 +14,8 @@ Play
 Select Play. The first time, choose a player name. Play starts the local server and then the game; closing the game stops both. Play always starts game version 1.00, even when the 1.21 update is set up (the update is used for card pictures).
 In Diamond Dynasty you start with a 26-player squad of Common cards from the game's roster and 5,000 Stubs. Packs, exchanges, programs, Showdown, Mini Seasons and Conquest work. The Community Market and buying Stubs are off, and there is no play against other people.
 
+To set up or play without the launcher, follow manual/README.txt.
+
 Import special cards (optional)
 Import special cards on the Home page makes your PC download the card list, and only the pictures your game files lack, from the publisher's public website (about 35 MB, about 5 minutes). It adds about 1,775 special cards with their designed art, mostly from your own 1.21 update files, and 40 event packs (Chase Packs, Diamond Duos). Stop the game and turn off Offline mode first. It runs only when you press the button; please be aware of that website's terms. Without it you have the Live roster cards with player photos.
 
