@@ -1,0 +1,357 @@
+#include "std_include.hpp"
+#include "commands.hpp"
+#include "mod_commands.hpp"
+#include "support_commands.hpp"
+#include "ui_commands.hpp"
+#include "cef/cef_ui.hpp"
+#include "show23/setup.hpp"
+#include "updater/launcher_update.hpp"
+#include "updater/part_store.hpp"
+#include "updater/release_source.hpp"
+
+#include <utils/flags.hpp>
+#include <utils/properties.hpp>
+#include <utils/property_keys.hpp>
+#include <utils/string.hpp>
+#include <shellapi.h>
+#include <thread>
+
+namespace commands
+{
+    namespace
+    {
+        std::string string(const rapidjson::Value& value, const char* key)
+        {
+            if (!value.IsObject()) return {};
+            const auto field = value.FindMember(key);
+            if (field == value.MemberEnd() || !field->value.IsString()) return {};
+            return {field->value.GetString(), field->value.GetStringLength()};
+        }
+
+        rapidjson::Value json(const std::string& text, rapidjson::Document::AllocatorType& allocator)
+        {
+            return rapidjson::Value(text.data(), static_cast<rapidjson::SizeType>(text.size()), allocator);
+        }
+
+        void result(rapidjson::Document& response, const std::string& message)
+        {
+            response.SetObject();
+            response.AddMember("message", json(message, response.GetAllocator()), response.GetAllocator());
+        }
+
+        struct task
+        {
+            std::mutex mutex;
+            bool busy{};
+            std::string message;
+        };
+        task verify;
+        struct update_state
+        {
+            std::mutex mutex;
+            bool busy{};
+            unsigned generation{};
+            std::array<std::string, 3> messages;
+        };
+        update_state updates;
+
+        std::string describe(const release_channel::outcome& outcome)
+        {
+            if (!outcome.chosen) return outcome.error.empty() ? "No release has been published yet." : outcome.error;
+            const auto cached = outcome.from_cache ? " " + outcome.error : std::string{};
+            return "Release " + outcome.chosen->version + " found. Installing this part is not implemented in this version." + cached;
+        }
+
+        void check_parts()
+        {
+            if (utils::flags::has_flag("offline")) return;
+            const auto channel = release_source::current_channel();
+            unsigned generation;
+            {
+                std::lock_guard lock(updates.mutex);
+                if (updates.busy) return;
+                updates.busy = true;
+                generation = updates.generation;
+                updates.messages.fill({});
+            }
+            try
+            {
+                std::thread([channel, generation]
+                {
+                    std::array<std::string, 3> messages;
+                    try
+                    {
+                        const auto emulator = release_source::resolve(release_source::emulator_repo, channel,
+                                                                     {"emulator.json", "SHA256SUMS.txt"}, true);
+                        const auto shared = release_source::resolve_shared_parts(channel);
+                        messages = {describe(emulator), describe(shared[0]), describe(shared[1])};
+                    }
+                    catch (const std::exception&)
+                    {
+                        messages.fill("Could not check for updates.");
+                    }
+
+                    std::lock_guard lock(updates.mutex);
+                    if (generation == updates.generation) updates.messages = std::move(messages);
+                    updates.busy = false;
+                }).detach();
+            }
+            catch (...)
+            {
+                std::lock_guard lock(updates.mutex);
+                updates.busy = false;
+                updates.messages.fill("Could not start the update check.");
+            }
+        }
+
+        void register_settings(cef::cef_ui& ui)
+        {
+            ui.add_command("get-settings", [](const auto&, rapidjson::Document& response)
+            {
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("offline", utils::flags::has_flag("offline"), a);
+                response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
+                response.AddMember("portable", utils::properties::is_portable(), a);
+                response.AddMember("theme", json(utils::properties::load(property_keys::THEME).value_or("default"), a), a);
+                response.AddMember("language", json(utils::properties::load(property_keys::LANGUAGE).value_or("en"), a), a);
+                response.AddMember("channel", rapidjson::StringRef(release_channel::channel_name(release_source::current_channel())), a);
+            });
+
+            ui.add_command("save-setting", [](const rapidjson::Value& request, rapidjson::Document& response)
+            {
+                const auto key = string(request, "key");
+                const auto value = string(request, "value");
+                if (key == "language" && (value == "en" || value == "fr" || value == "es" || value == "ru"))
+                    utils::properties::store(property_keys::LANGUAGE, value);
+                else if (key == "theme" && (value == "default" || value == "navy-gradient" || value == "dark"))
+                    utils::properties::store(property_keys::THEME, value);
+                else if (key == "offline" && (value == "true" || value == "false"))
+                {
+                    utils::properties::store(property_keys::OFFLINE_MODE, value);
+                }
+                else if (key == "channel" && (value == "stable" || value == "beta"))
+                {
+                    {
+                        std::lock_guard lock(updates.mutex);
+                        ++updates.generation;
+                        updates.messages.fill({});
+                    }
+                    release_source::set_channel(release_channel::parse_channel(value));
+                    launcher_update::channel_changed();
+                }
+                else
+                {
+                    response.SetBool(false);
+                    return;
+                }
+                response.SetBool(true);
+            });
+        }
+
+        void register_updates(cef::cef_ui& ui)
+        {
+            const auto launcher_status = [](rapidjson::Document& response)
+            {
+                rapidjson::Value status;
+                launcher_update::write_status(status, response.GetAllocator());
+                response.CopyFrom(status, response.GetAllocator());
+            };
+            ui.add_command("get-launcher-update", [launcher_status](const auto&, rapidjson::Document& response)
+            {
+                launcher_status(response);
+            });
+            ui.add_command("check-launcher-update", [launcher_status](const auto&, rapidjson::Document& response)
+            {
+                launcher_update::check();
+                launcher_status(response);
+            });
+            ui.add_command("start-launcher-update", [](const auto&, rapidjson::Document& response)
+            {
+                response.SetBool(launcher_update::start_download());
+            });
+            ui.add_command("request-stable", [](const rapidjson::Value& value, rapidjson::Document& response)
+            {
+                const auto version = string(value, "version");
+                response.SetBool(!version.empty() && launcher_update::start_download(version));
+            });
+            ui.add_command("keep-beta", [](const auto&, rapidjson::Document& response)
+            {
+                launcher_update::revoke_downgrade();
+                response.SetBool(true);
+            });
+            ui.add_command("restart-launcher-update", [](const auto&, rapidjson::Document& response)
+            {
+                std::string error;
+                const auto success = launcher_update::restart(error);
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("success", success, a);
+                response.AddMember("ok", success, a);
+                response.AddMember("error", json(error, a), a);
+            });
+            ui.add_command("open-launcher-release", [](const auto&, rapidjson::Document& response)
+            {
+                if (utils::flags::has_flag("offline"))
+                {
+                    response.SetBool(false);
+                    return;
+                }
+                const auto opened = ShellExecuteW(nullptr, L"open", L"https://github.com/ChronoRixun/show23-pc-launcher/releases/latest",
+                                                  nullptr, nullptr, SW_SHOWNORMAL);
+                response.SetBool(reinterpret_cast<INT_PTR>(opened) > 32);
+            });
+            ui.add_command("check-parts", [](const auto&, rapidjson::Document& response)
+            {
+                launcher_update::check();
+                check_parts();
+                response.SetBool(!utils::flags::has_flag("offline"));
+            });
+            ui.add_command("get-parts", [](const auto&, rapidjson::Document& response)
+            {
+                const auto runtime = parts::installed();
+                std::lock_guard lock(updates.mutex);
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("busy", updates.busy, a);
+                rapidjson::Value rows(rapidjson::kArrayType);
+                for (const auto part : parts::all)
+                {
+                    const auto index = parts::index(part);
+                    const auto& installed = runtime.manifests[index];
+                    const auto version = part == parts::id::launcher ? launcher_update::running_version() :
+                        (installed ? installed->version : std::string{});
+                    rapidjson::Value row(rapidjson::kObjectType);
+                    row.AddMember("part", rapidjson::StringRef(parts::name(part)), a);
+                    row.AddMember("version", json(version, a), a);
+                    row.AddMember("prerelease", release_channel::is_prerelease(version), a);
+                    if (index) row.AddMember("status", json(updates.messages[index - 1], a), a);
+                    rows.PushBack(row, a);
+                }
+                response.AddMember("parts", rows, a);
+            });
+        }
+
+        void register_game(cef::cef_ui& ui)
+        {
+            ui.add_command("get-show23", [](const auto&, rapidjson::Document& response)
+            {
+                const auto runtime = parts::installed();
+                const auto install = show23::install_folder();
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("ready", parts::ready(runtime), a);
+                response.AddMember("folder", json(install ? utils::string::path_to_utf8(*install) : std::string{}, a), a);
+            });
+
+            ui.add_command("setup-show23", [](const rapidjson::Value& value, rapidjson::Document& response)
+            {
+                const auto kind = string(value, "kind");
+                if (kind != "package" && kind != "folder")
+                {
+                    result(response, "Choose a base game package or folder.");
+                    return;
+                }
+                const auto update = string(value, "update");
+                const show23::setup_request request{
+                    kind == "package" ? show23::source_kind::package : show23::source_kind::folder,
+                    utils::string::utf8_to_path(string(value, "base")),
+                    update.empty() ? std::nullopt : std::optional(utils::string::utf8_to_path(update)),
+                    utils::string::utf8_to_path(string(value, "install"))
+                };
+                {
+                    // A destination change cannot invalidate the inputs of a running verification.
+                    std::lock_guard lock(verify.mutex);
+                    if (verify.busy)
+                    {
+                        result(response, "Wait for Verify Files to finish.");
+                        return;
+                    }
+                    verify.message.clear();
+                }
+                const auto state = show23::begin_setup(request);
+                result(response, state.message);
+                response.AddMember("pending", state.state == show23::status::not_implemented, response.GetAllocator());
+            });
+
+            ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)
+            {
+                const auto runtime = parts::installed();
+                if (!parts::ready(runtime))
+                {
+                    result(response, "Set up the game first.");
+                    return;
+                }
+                const auto install = *show23::install_folder();
+                const auto server = show23::start_local_server(install, parts::component_folder(runtime, parts::id::server));
+                if (server.state != show23::status::complete)
+                {
+                    result(response, server.message);
+                    return;
+                }
+                const auto emulator = show23::start_emulator(install, parts::component_folder(runtime, parts::id::emulator));
+                result(response, emulator.message);
+            });
+
+            ui.add_command("verify-show23", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                response.SetBool(false);
+                if (verify.busy) return;
+                verify.busy = true;
+                verify.message.clear();
+                try
+                {
+                    std::thread([runtime = parts::installed()]
+                    {
+                        std::string outcome;
+                        try { outcome = parts::verify_files(runtime); }
+                        catch (const std::exception&) { outcome = "Could not verify the runtime files."; }
+                        std::lock_guard finish(verify.mutex);
+                        verify.message = std::move(outcome);
+                        verify.busy = false;
+                    }).detach();
+                    response.SetBool(true);
+                }
+                catch (const std::exception&)
+                {
+                    verify.busy = false;
+                    verify.message = "Could not start verification.";
+                }
+            });
+
+            ui.add_command("get-verify", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                result(response, verify.message);
+                response.AddMember("busy", verify.busy, response.GetAllocator());
+            });
+        }
+    }
+
+    std::string game_entry::get_game_key() const { return show23::game_id; }
+    std::optional<std::filesystem::path> game_entry::get_install_path() const
+    {
+        const auto path = show23::install_folder();
+        if (!path || !parts::ordinary_path(*path / "data" / "mods", true)) return std::nullopt;
+        return path;
+    }
+
+    std::optional<game_entry> command_context::get_game_config_from_request(const rapidjson::Value& value) const
+    {
+        if (string(value, "game") == show23::game_id) return game_entry{};
+        return std::nullopt;
+    }
+
+    void register_all_commands(cef::cef_ui& ui)
+    {
+        static command_context context;
+        ui_commands::register_commands(ui, context);
+        mod_commands::register_commands(ui, context);
+        support_commands::register_commands(ui, context);
+        register_settings(ui);
+        register_updates(ui);
+        register_game(ui);
+        ui.add_command("confirm-launcher-started", [](const auto&, auto&) { launcher_update::confirm_started(); });
+    }
+}

@@ -1,0 +1,14 @@
+/build/
+/dist/
+/deps/cef/
+/deps/curl/
+/deps/rapidjson/
+/deps/libtomcrypt/
+/deps/libtommath/
+/deps/miniz/
+/cef.tar
+/cef.tar.bz2
+/.vs/
+*.user
+*.log
+__pycache__/

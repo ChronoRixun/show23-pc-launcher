@@ -1,0 +1,1365 @@
+#include "std_include.hpp"
+#include "launcher_update.hpp"
+#include "release_source.hpp"
+#include "channel_refresh.hpp"
+#include "swap_retry.hpp"
+
+#include "tools/archive.hpp"
+#include "tools/checked_download.hpp"
+#include "part_manifest.hpp"
+#include "part_store.hpp"
+
+#include <utils/finally.hpp>
+#include <utils/flags.hpp>
+#include <utils/http.hpp>
+#include <utils/io.hpp>
+#include <utils/logger.hpp>
+#include <utils/nt.hpp>
+#include <utils/properties.hpp>
+#include <utils/property_keys.hpp>
+#include <utils/string.hpp>
+
+#include <version.hpp>
+
+#include <rapidjson/writer.h>
+#include <shellapi.h>
+#include <thread>
+
+namespace launcher_update
+{
+    namespace
+    {
+        constexpr auto release_page = "https://github.com/ChronoRixun/show23-pc-launcher/releases/latest";
+        constexpr auto exe_name = "show23-pc.exe";
+        constexpr auto sums_name = "SHA256SUMS.txt";
+        constexpr auto manifest_name = "launcher.json";
+        constexpr auto restart_flag = L"update-restart";
+
+        struct release
+        {
+            std::string version;
+            std::string page;
+            std::string zip;
+            std::string zip_url;
+            std::uint64_t size{};
+            std::string sums_url;
+            std::string manifest_url;
+            bool prerelease{};
+        };
+
+        struct state_t
+        {
+            // idle, checking, up-to-date, check-failed, available, downloading, ready, failed
+            std::string state = "idle";
+            std::optional<release> latest; // the update channel's release
+            channel_refresh::ticket selection;
+            release_channel::channel channel = release_channel::channel::stable; // the channel `latest` is of
+            bool from_cache{};       // Beta: GitHub couldn't be asked; `latest` is the last one found
+            std::string cache_error; // why
+            bool downgrade{};        // the download is the latest release over a newer beta (Switch back to Stable)
+            std::uint64_t done{};
+            std::uint64_t total{};
+            std::string error;
+            std::string install_error; // a downloaded update this start could not install
+            std::string ready_version;
+            std::string updated_to; // this start finished an update to this version
+            std::chrono::system_clock::time_point checked{};
+        };
+
+        std::mutex mutex_;
+        state_t state_;
+        channel_refresh::gate refresh_;
+
+        template <typename F>
+        void with_state(F&& f)
+        {
+            std::lock_guard lock(mutex_);
+            f(state_);
+        }
+
+        rapidjson::Value make_string(const std::string& text, rapidjson::Document::AllocatorType& allocator)
+        {
+            rapidjson::Value value{};
+            value.SetString(text.data(), static_cast<rapidjson::SizeType>(text.size()), allocator);
+            return value;
+        }
+
+        std::string json_string(const rapidjson::Value& object, const char* key)
+        {
+            if (!object.IsObject())
+            {
+                return {};
+            }
+            const auto member = object.FindMember(key);
+            return member != object.MemberEnd() && member->value.IsString() ? member->value.GetString() : std::string{};
+        }
+
+        bool managed_folder(const std::string& name)
+        {
+            return name == "cef" || name == "launcher-ui" || name == "launcher-release";
+        }
+
+        // A release version ("0.1.2", "0.5.0-beta.1"), which compare_versions() orders exactly
+        // (SemVer: a pre-release is below its release).
+        bool is_release_version(const std::string& version)
+        {
+            return parts::is_version(version);
+        }
+
+        // The version this launcher is, for updating; empty for a development build, which never
+        // updates: Debug builds and builds outside a release tag are excluded. A beta
+        // is its whole tag ("v0.5.0-beta.1" -> "0.5.0-beta.1"); VERSION_PRODUCT has only its numbers.
+        std::string current_version()
+        {
+#ifdef _DEBUG
+            return {};
+#else
+            const auto build = release_channel::launcher_build(GIT_DESCRIBE, GIT_TAG, VERSION_PRODUCT);
+            return build.release && is_release_version(build.version) ? build.version : std::string{};
+#endif
+        }
+
+        std::string launcher_repo()
+        {
+            return release_source::launcher_repo;
+        }
+
+        bool is_download_url(const std::string& url)
+        {
+            return url.starts_with("https://github.com/ChronoRixun/show23-pc-launcher/releases/download/");
+        }
+
+        std::filesystem::path portable_root()
+        {
+            return utils::properties::get_portable_root();
+        }
+
+        // Only the release zip's layout updates itself: portable by its marker file (not the
+        // -portable flag alone), so the data folder is the one next to the executable.
+        bool can_install()
+        {
+            std::error_code error;
+            return utils::properties::is_portable() && std::filesystem::exists(utils::properties::get_portable_marker(), error);
+        }
+
+        std::filesystem::path updates_folder()
+        {
+            return portable_root() / "updates";
+        }
+
+        // The install path's log lines also go to updates\update.log, with the time and the process:
+        // show23-pc.log starts over with every start, and an update spans several (issue #2:
+        // the start that hung could not be told apart from the ones around it). Kept under 256 KB.
+        void append_to_update_log(const std::string& message)
+        {
+            // One mutex for every trace() call, whatever its arguments' types.
+            static std::mutex update_log_mutex;
+            std::lock_guard lock(update_log_mutex);
+            const auto file = updates_folder() / "update.log";
+            std::error_code error;
+            if (!std::filesystem::is_directory(updates_folder(), error))
+            {
+                return;
+            }
+            if (const auto size = std::filesystem::file_size(file, error); !error && size > 256 * 1024)
+            {
+                auto old = file;
+                old += L".old";
+                std::filesystem::rename(file, old, error);
+            }
+            std::ofstream stream(file, std::ios::binary | std::ios::app);
+            const auto now = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
+            stream << std::format("{:%Y-%m-%d %H:%M:%S}Z [{}] {}\r\n", now, GetCurrentProcessId(), message);
+        }
+
+        template <typename... Args>
+        void trace(const std::format_string<Args...> fmt, Args&&... args)
+        {
+            const auto message = std::format(fmt, std::forward<Args>(args)...);
+            utils::logger::write("launcher update: {}", message);
+            append_to_update_log(message);
+        }
+
+        std::filesystem::path exe_path()
+        {
+            static const auto path = utils::nt::library{}.get_path();
+            return path;
+        }
+
+        bool path_exists(const std::filesystem::path& path)
+        {
+            std::error_code error;
+            return std::filesystem::exists(path, error);
+        }
+
+        bool remove_tree(const std::filesystem::path& path)
+        {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+            return !path_exists(path);
+        }
+
+        bool move_path(const std::filesystem::path& from, const std::filesystem::path& to)
+        {
+            // On one drive a rename, which Windows allows for a running executable too.
+            if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH))
+            {
+                return true;
+            }
+            const auto error = GetLastError();
+            trace("rename {} -> {} failed: {} ({})", utils::string::path_to_utf8(from), utils::string::path_to_utf8(to),
+                  std::system_category().message(static_cast<int>(error)), error);
+            return false;
+        }
+
+        // For files this process has just written (an unpacked download): a scanner (antivirus, the
+        // indexer) can hold one open for a moment, and a folder with an open file can't be renamed.
+        bool move_fresh_path(const std::filesystem::path& from, const std::filesystem::path& to)
+        {
+            for (auto attempt = 0; attempt < 40; ++attempt)
+            {
+                if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH))
+                {
+                    if (attempt)
+                    {
+                        utils::logger::write("launcher update: {} was held for a moment (moved on try {})",
+                                             utils::string::path_to_utf8(from.filename()), attempt + 1);
+                    }
+                    return true;
+                }
+                const auto error = GetLastError();
+                if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION)
+                {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+            return move_path(from, to); // once more, logging the failure
+        }
+
+        std::string read_json_string(const std::filesystem::path& file, const char* key)
+        {
+            std::string data;
+            if (!utils::io::read_file(file, &data))
+            {
+                return {};
+            }
+            rapidjson::Document document;
+            document.Parse(data.data(), data.size());
+            return document.HasParseError() ? std::string{} : json_string(document, key);
+        }
+
+        // Writes `data` durably: a temporary file, flushed to the disk, renamed over `file`.
+        bool write_durable(const std::filesystem::path& file, const std::string& data)
+        {
+            auto temp = file;
+            temp += L".tmp";
+            auto* const handle = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (handle == INVALID_HANDLE_VALUE)
+            {
+                utils::logger::write("launcher update: could not write {}", utils::string::path_to_utf8(file));
+                return false;
+            }
+            DWORD written = 0;
+            const auto ok = WriteFile(handle, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) &&
+                            written == data.size() && FlushFileBuffers(handle);
+            CloseHandle(handle);
+            if (!ok || !MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            {
+                DeleteFileW(temp.c_str());
+                utils::logger::write("launcher update: could not write {}", utils::string::path_to_utf8(file));
+                return false;
+            }
+            return true;
+        }
+
+        bool write_document(const std::filesystem::path& file, const rapidjson::Document& document)
+        {
+            rapidjson::StringBuffer buffer;
+            rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+            document.Accept(writer);
+            return write_durable(file, std::string(buffer.GetString(), buffer.GetLength()));
+        }
+
+        bool write_json(const std::filesystem::path& file, const std::vector<std::pair<std::string, std::string>>& members)
+        {
+            rapidjson::Document document(rapidjson::kObjectType);
+            auto& allocator = document.GetAllocator();
+            for (const auto& [key, value] : members)
+            {
+                document.AddMember(make_string(key, allocator), make_string(value, allocator), allocator);
+            }
+            return write_document(file, document);
+        }
+
+        // ---- the swap ----
+
+        struct item
+        {
+            std::string name;           // "exe" or "data/<folder>"
+            std::filesystem::path live; // where the launcher uses it
+            std::filesystem::path next; // the new one, in updates\ready
+            std::filesystem::path prev; // the old one while swapping, in updates\previous
+        };
+
+        std::vector<item> items_for(const std::vector<std::string>& names)
+        {
+            const auto updates = updates_folder();
+            std::vector<item> items;
+            for (const auto& name : names)
+            {
+                if (name == "exe")
+                {
+                    items.push_back({name, exe_path(), updates / "ready" / exe_name, updates / "previous" / exe_name});
+                    continue;
+                }
+                const auto folder = utils::string::utf8_to_path(name.substr(5));
+                items.push_back({name, portable_root() / "data" / folder, updates / "ready" / "data" / folder,
+                                 updates / "previous" / "data" / folder});
+            }
+            return items;
+        }
+
+        void add_folders(const std::filesystem::path& data, std::set<std::string>& names)
+        {
+            std::error_code error;
+            for (const auto& entry : std::filesystem::directory_iterator(data, error))
+            {
+                const auto name = utils::string::path_to_utf8(entry.path().filename());
+                if (entry.is_directory(error) && managed_folder(name))
+                {
+                    names.insert("data/" + name);
+                }
+            }
+        }
+
+        // What updates\ready brings: every folder in its data\ (cef, launcher-ui), then the exe.
+        std::vector<std::string> ready_names()
+        {
+            std::set<std::string> folders;
+            add_folders(updates_folder() / "ready" / "data", folders);
+            std::vector<std::string> names(folders.begin(), folders.end());
+            names.emplace_back("exe");
+            return names;
+        }
+
+        // Everything a swap may have moved, from what is on the disk (updates\previous and
+        // updates\ready) plus the journal's list when it is readable: recovery never depends on the
+        // journal's contents alone.
+        std::vector<std::string> swap_names(const std::vector<std::string>& journal)
+        {
+            std::set<std::string> folders;
+            add_folders(updates_folder() / "previous" / "data", folders);
+            add_folders(updates_folder() / "ready" / "data", folders);
+            for (const auto& name : journal)
+            {
+                if (name != "exe")
+                {
+                    folders.insert(name);
+                }
+            }
+            std::vector<std::string> names(folders.begin(), folders.end());
+            names.emplace_back("exe");
+            return names;
+        }
+
+        bool swap(const std::vector<item>& items)
+        {
+            for (const auto& entry : items)
+            {
+                if (path_exists(entry.live) && !move_path(entry.live, entry.prev))
+                {
+                    return false;
+                }
+                if (!move_path(entry.next, entry.live))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Undoes swap() from any point: what moved in goes back to ready\, what moved out comes back.
+        // Safe to repeat after a partial run.
+        bool roll_back(const std::vector<item>& items)
+        {
+            std::error_code error;
+            std::filesystem::create_directories(updates_folder() / "ready" / "data", error);
+            auto ok = true;
+            for (auto it = items.rbegin(); it != items.rend(); ++it)
+            {
+                // Moved in: the new one is live and gone from ready\ (the exe only with the old one saved).
+                if (path_exists(it->live) && !path_exists(it->next) && (path_exists(it->prev) || it->name != "exe"))
+                {
+                    ok = move_path(it->live, it->next) && ok;
+                }
+                if (path_exists(it->prev) && !path_exists(it->live))
+                {
+                    ok = move_path(it->prev, it->live) && ok;
+                }
+            }
+            return ok;
+        }
+
+        // Real files and time for swap_retry.
+        swap_retry::hooks hooks_for(const std::vector<item>& items)
+        {
+            swap_retry::hooks hooks;
+            hooks.swap = [&items]
+            {
+                return swap(items);
+            };
+            hooks.roll_back = [&items]
+            {
+                return roll_back(items);
+            };
+            hooks.sleep = [](const std::chrono::milliseconds pause)
+            {
+                std::this_thread::sleep_for(pause);
+            };
+            hooks.log = [](const std::string& line)
+            {
+                trace("{}", line);
+            };
+            return hooks;
+        }
+
+        // Retries while the files are still held (by the processes of the version that just ran).
+        bool roll_back_retrying(const std::vector<item>& items)
+        {
+            return swap_retry::roll_back(hooks_for(items));
+        }
+
+        bool write_journal(const std::filesystem::path& file, const std::string& version, const std::vector<item>& items)
+        {
+            rapidjson::Document document(rapidjson::kObjectType);
+            auto& allocator = document.GetAllocator();
+            document.AddMember("version", make_string(version, allocator), allocator);
+            rapidjson::Value names(rapidjson::kArrayType);
+            for (const auto& entry : items)
+            {
+                names.PushBack(make_string(entry.name, allocator), allocator);
+            }
+            document.AddMember("items", names, allocator);
+            return write_document(file, document);
+        }
+
+        std::vector<std::string> read_journal(const std::filesystem::path& file)
+        {
+            std::string data;
+            std::vector<std::string> names;
+            if (!utils::io::read_file(file, &data))
+            {
+                return names;
+            }
+            rapidjson::Document document;
+            document.Parse(data.data(), data.size());
+            if (document.HasParseError() || !document.IsObject() || !document.HasMember("items") || !document["items"].IsArray())
+            {
+                return names;
+            }
+            for (const auto& value : document["items"].GetArray())
+            {
+                const std::string name = value.IsString() ? value.GetString() : "";
+                if (name == "exe" || (name.starts_with("data/") && managed_folder(name.substr(5))))
+                {
+                    names.push_back(name);
+                }
+            }
+            return names;
+        }
+
+        void note_failure(const std::string& version, const std::string& message)
+        {
+            trace("{}: {}", version, message);
+            write_json(updates_folder() / "failed.json", {{"version", version}, {"error", message}});
+        }
+
+        // Keeps a download that can't be used (updates\discarded) instead of deleting it.
+        void set_aside(const std::filesystem::path& ready)
+        {
+            if (!path_exists(ready))
+            {
+                return;
+            }
+            const auto discarded = updates_folder() / "discarded";
+            if (!remove_tree(discarded) || !move_path(ready, discarded))
+            {
+                remove_tree(ready);
+            }
+        }
+
+        constexpr auto unconfirmed_starts = 2; // a new version's starts without its page shown before a roll back
+        constexpr auto held_retries = 3;       // starts that try again on their own after files were held
+
+        std::string held_message(const int tries)
+        {
+            return std::string("Its files could not be put in place: another program kept the launcher's files open. ") +
+                   (tries < held_retries
+                        ? "It is tried again the next time the launcher starts."
+                        : "Close programs that may have them open (an Explorer window on the launcher's folder, "
+                          "OneDrive or other sync software) and press Restart now.");
+        }
+
+        // A swap that can't be undone: never start the launcher on half of one version.
+        void stuck(const std::string& what)
+        {
+            const auto text = std::format(
+                "show23-pc launcher could not finish undoing an update ({}).\n\n"
+                "The previous version's files are in:\n{}\n\n"
+                "Close every show23-pc launcher window (and any program that may have the launcher's files open) and start "
+                "show23-pc launcher again: it tries again. If this keeps happening, download the launcher again from {} and "
+                "unzip it over this one; your settings are kept.",
+                what, utils::string::path_to_utf8(updates_folder() / "previous"), release_page);
+            trace("stuck: {}", what);
+            MessageBoxW(nullptr, utils::string::convert(text).c_str(), L"show23-pc launcher", MB_ICONERROR | MB_OK);
+        }
+
+        // ---- the release ----
+
+        // tools/package-portable.ps1's names.
+        std::string zip_name(const std::string& version)
+        {
+            return "show23-pc-" + version + "-win64-portable.zip";
+        }
+
+        // The launcher's view of a release: its portable zip and SHA256SUMS.txt, both by its tag.
+        std::optional<release> to_release(const release_channel::release& found, std::string& error)
+        {
+            release latest{};
+            latest.version = found.version;
+            latest.prerelease = found.prerelease;
+            latest.page = std::string(release_page);
+            if (!is_release_version(latest.version))
+            {
+                error = "The release's tag (" + found.tag + ") is not a version number; no update.";
+                return std::nullopt;
+            }
+            const auto zip = zip_name(latest.version);
+            for (const auto& asset : found.assets)
+            {
+                if (!is_download_url(asset.url))
+                {
+                    continue;
+                }
+                if (asset.name == zip && asset.size)
+                {
+                    latest.zip = asset.name;
+                    latest.zip_url = release_source::file_url(launcher_repo(), found, asset.name);
+                    latest.size = asset.size;
+                }
+                else if (asset.name == sums_name)
+                {
+                    latest.sums_url = release_source::file_url(launcher_repo(), found, asset.name);
+                }
+                else if (asset.name == manifest_name && asset.size && asset.size <= 256 * 1024)
+                {
+                    latest.manifest_url = release_source::file_url(launcher_repo(), found, asset.name);
+                }
+            }
+            if (latest.zip.empty() || latest.sums_url.empty() || latest.manifest_url.empty() || !latest.size)
+            {
+                // A release still being published (its files upload after it is created).
+                error = "Release " + latest.version + " is missing the portable ZIP, manifest or SHA256SUMS.txt.";
+                return std::nullopt;
+            }
+            return latest;
+        }
+
+
+        // The update channel's release (release_source: Stable, GitHub's releases/latest; Beta, the
+        // releases list), or that channel's last one when GitHub can't be asked (`from_cache`, `error` says
+        // why). Its zip and SHA256SUMS.txt are the ones of its tag.
+        std::optional<release> fetch_release(const release_channel::channel channel, std::string& error, bool& from_cache)
+        {
+            from_cache = false;
+            const auto outcome = release_source::resolve(launcher_repo(), channel, {zip_name("{version}"), sums_name, manifest_name}, true);
+            if (!outcome.chosen)
+            {
+                error = outcome.error;
+                return std::nullopt;
+            }
+            from_cache = outcome.from_cache;
+            error = outcome.error;
+            std::string invalid;
+            auto latest = to_release(*outcome.chosen, invalid);
+            if (!latest)
+            {
+                error = invalid;
+            }
+            return latest;
+        }
+
+        // The SHA-256 SHA256SUMS.txt gives `name` ("<hash>  <name>" or "<hash> *<name>" lines).
+        std::string expected_sha256(const std::string& sums, const std::string& name)
+        {
+            std::istringstream lines(sums);
+            std::string line;
+            while (std::getline(lines, line))
+            {
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+                if (line.size() < 66)
+                {
+                    continue;
+                }
+                const auto hash = utils::string::to_lower(line.substr(0, 64));
+                auto file = line.substr(64);
+                file.erase(0, file.find_first_not_of(' '));
+                if (file.starts_with('*'))
+                {
+                    file.erase(0, 1);
+                }
+                const auto hex = std::all_of(hash.begin(), hash.end(), [](const char c)
+                {
+                    return std::isxdigit(static_cast<unsigned char>(c)) != 0;
+                });
+                if (hex && file == name)
+                {
+                    return hash;
+                }
+            }
+            return {};
+        }
+
+        // The folder of an unpacked release that holds show23-pc.exe: the top, or the one
+        // folder in it (the zip's show23-pc-<version>-win64-portable\).
+        std::optional<std::filesystem::path> content_root(const std::filesystem::path& unpacked)
+        {
+            if (utils::io::file_exists(unpacked / exe_name))
+            {
+                return unpacked;
+            }
+            std::error_code error;
+            std::optional<std::filesystem::path> only;
+            for (const auto& entry : std::filesystem::directory_iterator(unpacked, error))
+            {
+                if (only)
+                {
+                    return std::nullopt;
+                }
+                only = entry.path();
+            }
+            if (only && std::filesystem::is_directory(*only, error) && utils::io::file_exists(*only / exe_name))
+            {
+                return only;
+            }
+            return std::nullopt;
+        }
+
+        // A launcher in `folder` (updates\ready's layout) has what it needs to start.
+        bool is_complete(const std::filesystem::path& folder)
+        {
+            return utils::io::file_exists(folder / exe_name) &&
+                   utils::io::file_exists(folder / "data" / "cef" / CONFIG_NAME / "libcef.dll") &&
+                   utils::io::file_exists(folder / "data" / "launcher-ui" / "main.html");
+        }
+
+        // Download, verify, unpack into updates\ready; "" or a message for the player.
+        std::string stage(const release& latest, const release_channel::channel selected, const bool downgrade)
+        {
+            const auto updates = updates_folder();
+            std::error_code fs_error;
+            std::filesystem::create_directories(updates, fs_error);
+            const auto staging = updates / std::format(".staging-{}-{}", GetCurrentProcessId(), GetTickCount64());
+            std::filesystem::create_directories(staging, fs_error);
+            if (fs_error)
+            {
+                return "Could not create a folder in " + utils::string::path_to_utf8(updates) + ": " + fs_error.message();
+            }
+            const auto cleanup = utils::finally([&staging]
+            {
+                remove_tree(staging);
+            });
+
+            const auto manifest_response = utils::http::get_data(latest.manifest_url, {}, {}, {}, 20, 0);
+            if (!manifest_response || manifest_response->code != CURLE_OK || manifest_response->response_code != 200)
+                return "Could not download the release manifest.";
+            std::string manifest_error;
+            const auto manifest = parts::parse(manifest_response->buffer, manifest_error);
+            if (!manifest) return manifest_error;
+            if (manifest->part != parts::id::launcher || manifest->version != latest.version ||
+                release_channel::is_prerelease(manifest->version) != latest.prerelease ||
+                manifest->files.size() != 1 || manifest->files.front().path != latest.zip ||
+                manifest->files.front().size != latest.size)
+                return "The launcher manifest does not match the selected release.";
+
+            const auto runtime = parts::installed();
+            if (!runtime.error.empty()) return runtime.error;
+            const auto admission = parts::install_error(runtime.manifests, *manifest, current_version(), selected, downgrade);
+            if (!admission.empty()) return admission;
+            const auto sums = utils::http::get_data(latest.sums_url, {}, {}, {}, 20, 0);
+            if (!sums || sums->code != CURLE_OK || sums->response_code != 200)
+            {
+                return "Could not download the release's SHA256SUMS.txt.";
+            }
+            const auto sha256 = expected_sha256(sums->buffer, latest.zip);
+            if (sha256.empty() || manifest->files.front().sha256 != sha256)
+            {
+                return "The release's SHA256SUMS.txt does not match the manifest for " + latest.zip + ".";
+            }
+
+            const auto zip = staging / utils::string::utf8_to_path(latest.zip);
+            std::string actual;
+            const auto failure = checked_download::download_file(latest.zip_url, zip, latest.size, [](const std::uint64_t done, const std::uint64_t total)
+            {
+                with_state([&](state_t& state)
+                {
+                    state.done = done;
+                    state.total = total;
+                });
+            }, {}, actual);
+            if (!failure.empty())
+            {
+                return failure;
+            }
+            if (actual != sha256)
+            {
+                utils::logger::write("launcher update: {} SHA-256 {} expected {}", latest.zip, actual, sha256);
+                return "The download does not match the release's SHA-256, so it was not used.";
+            }
+
+            const auto unpacked = staging / "unpacked";
+            if (const auto error = archive::extract_zip(zip, unpacked); !error.empty())
+            {
+                return error;
+            }
+            utils::io::remove_file(zip);
+            const auto content = content_root(unpacked);
+            const auto data = content ? *content / "show23-pc" / "data" : std::filesystem::path{};
+            if (!content || !utils::io::directory_exists(data))
+            {
+                return "The release's zip is not a portable show23-pc launcher.";
+            }
+
+            // updates\ready's layout: the exe and data\, update.json last.
+            const auto ready = staging / "ready";
+            std::filesystem::create_directories(ready / "data", fs_error);
+            if (fs_error || !move_fresh_path(*content / exe_name, ready / exe_name) ||
+                !move_fresh_path(data / "cef", ready / "data" / "cef") ||
+                !move_fresh_path(data / "launcher-ui", ready / "data" / "launcher-ui") || !is_complete(ready))
+            {
+                return "The release's zip is missing parts of the launcher.";
+            }
+            std::filesystem::create_directories(ready / "data" / "launcher-release", fs_error);
+            if (fs_error || !write_durable(ready / "data" / "launcher-release" / manifest_name, manifest_response->buffer) ||
+                !write_json(ready / "update.json", {{"version", latest.version}, {"zip", latest.zip}, {"sha256", sha256},
+                                                 {"downgrade", downgrade ? "true" : "false"}}))
+                return "Could not save the verified update metadata.";
+
+            const auto target = updates / "ready";
+            if (!remove_tree(target) || !move_fresh_path(ready, target))
+            {
+                return "Could not move the update into place in " + utils::string::path_to_utf8(updates) + ".";
+            }
+            utils::logger::write("launcher update: {} downloaded and verified (SHA-256 {})", latest.version, sha256);
+            return {};
+        }
+
+        // This process's -flags (not a deep link), to start the launcher again with.
+        std::vector<std::wstring> flag_arguments()
+        {
+            std::vector<std::wstring> flags;
+            int count = 0;
+            auto* const argv = CommandLineToArgvW(GetCommandLineW(), &count);
+            if (!argv)
+            {
+                return flags;
+            }
+            for (int i = 1; i < count; ++i)
+            {
+                if (argv[i][0] == L'-' && _wcsicmp(argv[i] + 1, restart_flag) != 0)
+                {
+                    flags.emplace_back(argv[i]);
+                }
+            }
+            LocalFree(argv);
+            return flags;
+        }
+    }
+
+    result apply_pending()
+    {
+        if (!can_install())
+        {
+            return result::none;
+        }
+
+        const auto updates = updates_folder();
+        const auto journal = updates / "applying.json";
+        const auto applied = updates / "applied.json";
+        const auto ready = updates / "ready";
+        const auto previous = updates / "previous";
+
+        // 1. A swap that never finished (the process died or the power went mid-way): put the old
+        // launcher back. The items come from the disk; the journal may be empty or damaged.
+        if (path_exists(journal))
+        {
+            auto version = read_json_string(journal, "version");
+            if (version.empty())
+            {
+                version = read_json_string(ready / "update.json", "version");
+            }
+            const auto items = items_for(swap_names(read_journal(journal)));
+            const auto exe_moved = path_exists(previous / exe_name);
+            trace("found the journal of an interrupted swap to {}; rolling it back", version.empty() ? "?" : version);
+            if (!roll_back_retrying(items))
+            {
+                stuck("an interrupted update to " + (version.empty() ? std::string("a new version") : version));
+                return result::stop;
+            }
+            utils::io::remove_file(journal);
+            set_aside(ready);
+            remove_tree(previous);
+            note_failure(version, "The update was interrupted and the previous version was put back.");
+            if (exe_moved)
+            {
+                return result::relaunch; // this process may be the new executable: start the restored one
+            }
+        }
+
+        // 2. A new version's first starts. Each start is counted until its page is shown
+        // (confirm_started()); after two starts that never got that far (not one: a window closed
+        // early is no reason), the next one puts the previous version back.
+        if (path_exists(applied) && path_exists(previous))
+        {
+            const auto to = read_json_string(applied, "to");
+            const auto starts = std::atoi(read_json_string(applied, "starts").c_str());
+            if (starts < unconfirmed_starts)
+            {
+                write_json(applied, {{"from", read_json_string(applied, "from")}, {"to", to}, {"starts", std::to_string(starts + 1)}});
+                return result::none;
+            }
+
+            trace("{} did not start {} times; restoring the previous version", to, starts);
+            const auto items = items_for(swap_names({}));
+            if (!roll_back_retrying(items))
+            {
+                stuck(to + " did not start, and the previous version could not be put back");
+                return result::stop;
+            }
+            utils::io::remove_file(applied);
+            set_aside(ready);
+            remove_tree(previous);
+            note_failure(to, "It did not start, so the previous version was put back.");
+            return result::relaunch;
+        }
+
+        // 3. A downloaded update.
+        const auto version = read_json_string(ready / "update.json", "version");
+        if (version.empty())
+        {
+            return result::none;
+        }
+        const auto current = current_version();
+        if (current.empty())
+        {
+            return result::none; // a development build never installs one
+        }
+        // Never an older version, unless the player chose it (Switch back to Stable wrote "downgrade").
+        const auto downgrade = read_json_string(ready / "update.json", "downgrade") == "true";
+        if (!is_release_version(version) || version == current ||
+            (release_channel::compare(version, current) < 0 && !downgrade))
+        {
+            utils::logger::write("launcher update: discarding updates\\ready ({}; this is {})", version, current);
+            remove_tree(ready);
+            return result::none;
+        }
+        if (!is_complete(ready))
+        {
+            set_aside(ready);
+            note_failure(version, "Its download is incomplete: a file of it is missing (security software may have removed it). "
+                                  "It was moved to updates\\discarded; Update downloads it again.");
+            return result::none;
+        }
+
+        std::string manifest_text;
+        std::string manifest_error;
+        const auto manifest_path = ready / "data" / "launcher-release" / manifest_name;
+        const auto manifest = utils::io::read_file(manifest_path, &manifest_text) ? parts::parse(manifest_text, manifest_error) : std::nullopt;
+        if (!manifest || manifest->part != parts::id::launcher || manifest->version != version)
+        {
+            set_aside(ready);
+            note_failure(version, "The staged release manifest is missing or invalid.");
+            return result::none;
+        }
+        const auto runtime = parts::installed();
+        const auto admission = runtime.error.empty() ?
+            parts::install_error(runtime.manifests, *manifest, current, release_source::current_channel(), downgrade) : runtime.error;
+        if (!admission.empty())
+        {
+            set_aside(ready);
+            note_failure(version, admission);
+            return result::none;
+        }
+
+        // Files held open on every try (an Explorer window, OneDrive): after three starts that failed
+        // on them, only Restart now tries again, so a start doesn't stall each time.
+        const auto held_file = ready / "held.json";
+        const auto install_now = ready / "install-now";
+        const auto held = std::atoi(read_json_string(held_file, "count").c_str());
+        if (held >= held_retries && !path_exists(install_now))
+        {
+            note_failure(version, held_message(held));
+            return result::none;
+        }
+        utils::io::remove_file(install_now);
+
+        // Leftovers of an earlier update (normally deleted once its window was up).
+        for (auto attempt = 0; !remove_tree(previous); ++attempt)
+        {
+            if (attempt >= 20)
+            {
+                note_failure(version, "The previous version's files are still in use (updates\\previous). "
+                                      "It installs the next time the launcher starts.");
+                return result::none;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        std::error_code fs_error;
+        std::filesystem::create_directories(previous / "data", fs_error);
+
+        const auto items = items_for(ready_names());
+        if (fs_error || !write_journal(journal, version, items))
+        {
+            remove_tree(previous);
+            note_failure(version, "Could not write to " + utils::string::path_to_utf8(updates) + " (is the drive full?). "
+                                  "Nothing was changed; it installs the next time the launcher starts.");
+            return result::none;
+        }
+        trace("installing {} over {} (held on {} earlier starts)", version, current, held);
+
+        // The previous launcher's processes (CEF's helpers outlive it by a few seconds) hold its
+        // files: a folder that can't be renamed yet rolls everything back, and it waits and retries,
+        // for about 30 s in all however long the roll backs take (swap_retry.hpp).
+        const auto outcome = swap_retry::install(hooks_for(items));
+        if (outcome == swap_retry::outcome::stuck)
+        {
+            stuck("installing " + version);
+            return result::stop;
+        }
+        if (outcome == swap_retry::outcome::held)
+        {
+            utils::io::remove_file(journal);
+            remove_tree(previous);
+            write_json(held_file, {{"count", std::to_string(held + 1)}});
+            note_failure(version, held_message(held + 1));
+            return result::none;
+        }
+
+        // Committed once the journal is gone (first: a crash before applied.json is written must
+        // not roll back a finished swap); updates\previous stays until the new page is shown.
+        utils::io::remove_file(journal);
+        write_json(applied, {{"from", current}, {"to", version}});
+        remove_tree(ready);
+        trace("installed {}", version);
+        return result::relaunch;
+    }
+
+    bool relaunch()
+    {
+        // -update-restart: the new process waits for this one to let go of the single-instance lock
+        // (main.cpp) instead of the usual 3 s, which a slow exit can outlast; it is not passed on.
+        std::wstring command_line = L"\"" + exe_path().wstring() + L"\" \"-" + restart_flag + L"\"";
+        for (const auto& flag : flag_arguments())
+        {
+            command_line += L" \"" + flag + L"\"";
+        }
+
+        // A start refused for a moment (a scanner looking at a just-swapped executable) is tried again:
+        // without the new process there is no launcher at all once this one exits.
+        for (auto attempt = 1;; ++attempt)
+        {
+            STARTUPINFOW startup_info{};
+            startup_info.cb = sizeof(startup_info);
+            PROCESS_INFORMATION process_info{};
+            if (CreateProcessW(exe_path().c_str(), command_line.data(), nullptr, nullptr, FALSE, CREATE_NEW_PROCESS_GROUP, nullptr,
+                               nullptr, &startup_info, &process_info))
+            {
+                trace("started {} (pid {})", utils::string::path_to_utf8(exe_path().filename()), process_info.dwProcessId);
+                CloseHandle(process_info.hThread);
+                CloseHandle(process_info.hProcess);
+                return true;
+            }
+            const auto error = GetLastError();
+            trace("could not start {} (try {}): {} ({})", utils::string::path_to_utf8(exe_path()), attempt,
+                  std::system_category().message(static_cast<int>(error)), error);
+            if (attempt >= 5)
+            {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500 * attempt));
+        }
+    }
+
+    bool is_restart()
+    {
+        return utils::flags::has_flag("update-restart");
+    }
+
+    void cleanup()
+    {
+        if (!can_install())
+        {
+            return;
+        }
+        const auto updates = updates_folder();
+
+        // Interrupted downloads (before this process can start one).
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(updates, error))
+        {
+            if (entry.path().filename().wstring().starts_with(L".staging-"))
+            {
+                remove_tree(entry.path());
+            }
+        }
+
+        if (const auto to = read_json_string(updates / "applied.json", "to"); !to.empty())
+        {
+            with_state([&](state_t& state)
+            {
+                state.updated_to = to;
+            });
+        }
+
+        // The version may be unknown (an interrupted swap whose journal and update.json were lost).
+        if (const auto failure = read_json_string(updates / "failed.json", "error"); !failure.empty())
+        {
+            const auto version = read_json_string(updates / "failed.json", "version");
+            with_state([&](state_t& state)
+            {
+                state.install_error = (version.empty() ? std::string("The update") : "Version " + version) +
+                                      " could not be installed. " + failure + " Your launcher was not changed.";
+            });
+        }
+        utils::io::remove_file(updates / "failed.json");
+
+        // A verified download still waiting (its install was put off): offer Restart now.
+        const auto ready_version = read_json_string(updates / "ready" / "update.json", "version");
+        const auto current = current_version();
+        const auto ready_downgrade = read_json_string(updates / "ready" / "update.json", "downgrade") == "true";
+        if (!ready_version.empty() && !current.empty() && is_complete(updates / "ready") &&
+            (release_channel::compare(ready_version, current) > 0 || (ready_downgrade && ready_version != current)))
+        {
+            with_state([&](state_t& state)
+            {
+                state.state = "ready";
+                state.ready_version = ready_version;
+            });
+        }
+
+        // Leftovers of an earlier update that are not a first start's way back.
+        if (!path_exists(updates / "applied.json") && path_exists(updates / "previous"))
+        {
+            std::thread([updates]
+            {
+                for (auto attempt = 0; attempt < 30 && !remove_tree(updates / "previous"); ++attempt)
+                {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+            }).detach();
+        }
+    }
+
+    void confirm_started()
+    {
+        const auto updates = updates_folder();
+        if (!can_install() || !path_exists(updates / "applied.json"))
+        {
+            return;
+        }
+        // The new version's window is up: it stands, and the previous one can go.
+        utils::io::remove_file(updates / "applied.json");
+        trace("the new version started");
+        std::thread([updates]
+        {
+            // The previous executable may still run for a moment (it started this one).
+            for (auto attempt = 0; attempt < 30 && !remove_tree(updates / "previous"); ++attempt)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }).detach();
+    }
+
+    void check()
+    {
+        if (utils::flags::has_flag("offline"))
+        {
+            return;
+        }
+        std::optional<channel_refresh::ticket> work;
+        {
+            std::lock_guard lock(mutex_);
+            if (state_.state == "checking" || state_.state == "downloading" || state_.state == "ready" ||
+                !(work = refresh_.begin(release_source::current_channel())))
+            {
+                return;
+            }
+            state_.state = "checking";
+        }
+
+        std::thread([work = *work]
+        {
+            bool success = false;
+            const auto finish = utils::finally([&]
+            {
+                bool again;
+                {
+                    std::lock_guard lock(mutex_);
+                    again = refresh_.finish(work, success);
+                    if (again)
+                    {
+                        state_.state = "idle";
+                        state_.latest.reset();
+                    }
+                }
+                if (again) check();
+            });
+            const auto channel = work.channel;
+            std::string error;
+            auto from_cache = false;
+            std::optional<release> latest;
+            try { latest = fetch_release(channel, error, from_cache); }
+            catch (const std::exception&) { error = "Could not check for a launcher release."; }
+            const auto current = current_version();
+            with_state([&](state_t& state)
+            {
+                if (!refresh_.current(work)) return;
+                state.selection = work;
+                state.checked = std::chrono::system_clock::now();
+                state.channel = channel;
+                state.from_cache = false;
+                state.cache_error.clear();
+                if (!latest)
+                {
+                    utils::logger::write("launcher update: check ({}): {}", release_channel::channel_name(channel), error);
+                    state.latest.reset(); // what an earlier check (maybe on the other channel) found no longer holds
+                    state.state = "check-failed";
+                    state.error = error;
+                    return;
+                }
+                success = true;
+                state.latest = latest;
+                state.from_cache = from_cache;
+                state.cache_error = from_cache ? error : std::string{};
+                state.error.clear();
+                // Never an older version on its own: a beta newer than the latest release stays (the
+                // page offers Switch back to Stable).
+                state.state = !current.empty() && release_channel::compare(latest->version, current) > 0 ? "available" : "up-to-date";
+            });
+        }).detach();
+    }
+
+    bool start_download(const std::string& downgrade_to)
+    {
+        if (utils::flags::has_flag("offline")) return false;
+        std::optional<release> latest;
+        channel_refresh::ticket selection;
+        {
+            std::lock_guard lock(mutex_);
+            const auto current = current_version();
+            if (!can_install() || current.empty() || !state_.latest || !refresh_.ready(release_source::current_channel()))
+            {
+                return false;
+            }
+            const auto newer = release_channel::compare(state_.latest->version, current) > 0;
+            // An older version only as Switch back to Stable: exactly the latest release the player was
+            // shown, over a beta, for this attempt.
+            const auto back = !downgrade_to.empty() && state_.channel == release_channel::channel::stable &&
+                              state_.latest->version == downgrade_to && release_channel::is_ahead_of(current, state_.latest->version);
+            if ((!newer && !back) || (state_.state != "available" && state_.state != "failed" && state_.state != "up-to-date") ||
+                (state_.state == "up-to-date" && !back))
+            {
+                return false;
+            }
+            latest = state_.latest;
+            selection = state_.selection;
+            state_.downgrade = back;
+            state_.state = "downloading";
+            state_.done = 0;
+            state_.total = latest->size;
+            state_.error.clear();
+            state_.install_error.clear();
+        }
+
+        std::thread([latest, selection]
+        {
+            std::string error;
+            try { error = stage(*latest, selection.channel, release_channel::compare(latest->version, current_version()) < 0); }
+            catch (const std::exception&) { error = "Could not stage the launcher update."; }
+            bool again = false;
+            with_state([&](state_t& state)
+            {
+                if (!refresh_.current(selection))
+                {
+                    remove_tree(updates_folder() / "ready");
+                    state.ready_version.clear();
+                    state.latest.reset();
+                    state.state = "idle";
+                    state.downgrade = false;
+                    again = true;
+                    return;
+                }
+                // Switched to Stable while a beta downloaded, or a switch back revoked meanwhile (Keep the
+                // beta, a channel change): it doesn't install.
+                const auto older = release_channel::compare(latest->version, current_version()) < 0;
+                if (error.empty() && ((release_channel::is_prerelease(latest->version) &&
+                                       release_source::current_channel() == release_channel::channel::stable && !older) ||
+                                      (older && !state.downgrade)))
+                {
+                    remove_tree(updates_folder() / "ready");
+                    state.state = "idle";
+                    state.downgrade = false;
+                    return;
+                }
+                // A switch back that failed leaves no permission behind: Settings asks again.
+                if (!error.empty() && state.downgrade)
+                {
+                    utils::logger::write("launcher update: switching back to {} failed: {}", latest->version, error);
+                    state.downgrade = false;
+                    state.state = "up-to-date";
+                    state.install_error = "Switching back to " + latest->version + " failed: " + error + " Your launcher was not changed.";
+                    return;
+                }
+                if (error.empty())
+                {
+                    state.state = "ready";
+                    state.ready_version = latest->version;
+                    return;
+                }
+                utils::logger::write("launcher update {}: {}", latest->version, error);
+                state.state = "failed";
+                state.error = error;
+            });
+            if (again) check();
+        }).detach();
+        return true;
+    }
+
+    bool restart(std::string& error)
+    {
+        {
+            std::lock_guard lock(mutex_);
+            if (state_.state != "ready")
+            {
+                error = "not-ready";
+                return false;
+            }
+        }
+
+        utils::io::write_file(updates_folder() / "ready" / "install-now", "");
+        std::thread([]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300)); // let the answer reach the UI
+            trace("restarting to install {}", read_json_string(updates_folder() / "ready" / "update.json", "version"));
+            if (relaunch())
+            {
+                utils::nt::terminate();
+            }
+            // Never exit without a launcher to take over: this one stays, and says so.
+            utils::io::remove_file(updates_folder() / "ready" / "install-now");
+            with_state([](state_t& state)
+            {
+                state.install_error = "Restart now could not start the launcher again. Close show23-pc launcher and start it "
+                                      "again to install the update.";
+            });
+        }).detach();
+        return true;
+    }
+
+    void write_status(rapidjson::Value& out, rapidjson::Document::AllocatorType& allocator)
+    {
+        const auto current = current_version();
+        const auto installable = can_install();
+        std::lock_guard lock(mutex_);
+        out.SetObject();
+        out.AddMember("enabled", !current.empty(), allocator);
+        out.AddMember("current", make_string(current, allocator), allocator);
+        out.AddMember("canInstall", installable, allocator);
+        out.AddMember("state", make_string(state_.state, allocator), allocator);
+        out.AddMember("latest", make_string(state_.latest ? state_.latest->version : std::string{}, allocator), allocator);
+        out.AddMember("page", make_string(state_.latest ? state_.latest->page : std::string{release_page}, allocator), allocator);
+        out.AddMember("size", state_.latest ? state_.latest->size : std::uint64_t{0}, allocator);
+        out.AddMember("done", state_.done, allocator);
+        out.AddMember("total", state_.total, allocator);
+        out.AddMember("error", make_string(state_.error, allocator), allocator);
+        out.AddMember("installError", make_string(state_.install_error, allocator), allocator);
+        out.AddMember("readyVersion", make_string(state_.ready_version, allocator), allocator);
+        out.AddMember("updatedTo", make_string(state_.updated_to, allocator), allocator);
+        const auto checked = state_.checked.time_since_epoch().count() == 0 ? 0 :
+            std::chrono::duration_cast<std::chrono::milliseconds>(state_.checked.time_since_epoch()).count();
+        out.AddMember("checkedAt", static_cast<int64_t>(checked), allocator);
+        // The update channel: what `latest` is of, whether this launcher is a pre-release (the Beta
+        // badge), whether it is a beta newer than the latest release (Stable: Switch back offered),
+        // and Beta's last release found when GitHub couldn't be asked.
+        out.AddMember("channel", rapidjson::StringRef(release_channel::channel_name(release_source::current_channel())), allocator);
+        out.AddMember("latestChannel", rapidjson::StringRef(release_channel::channel_name(state_.channel)), allocator);
+        out.AddMember("prerelease", release_channel::is_prerelease(current), allocator);
+        out.AddMember("aheadOfStable", state_.latest && state_.channel == release_channel::channel::stable &&
+                                           release_channel::is_ahead_of(current, state_.latest->version),
+                      allocator);
+        out.AddMember("fromCache", state_.from_cache, allocator);
+        out.AddMember("cacheError", make_string(state_.cache_error, allocator), allocator);
+        out.AddMember("downgrade", state_.downgrade, allocator);
+    }
+
+    std::string installed_version()
+    {
+        return current_version();
+    }
+
+    std::string running_version()
+    {
+        // A development build too keeps its last tag's suffix (one made after v0.5.0-beta.1 is not 0.5.0 yet).
+        const auto current = current_version();
+        return current.empty() ? release_channel::launcher_build(GIT_DESCRIBE, GIT_TAG, VERSION_PRODUCT).version : current;
+    }
+
+    namespace
+    {
+        // Called with mutex_ held: an approved switch back that hasn't installed yet no longer may.
+        void revoke_locked()
+        {
+            state_.downgrade = false;
+            if (state_.state == "ready" && can_install() &&
+                read_json_string(updates_folder() / "ready" / "update.json", "downgrade") == "true" && remove_tree(updates_folder() / "ready"))
+            {
+                trace("the switch back to {} was revoked before it installed", state_.ready_version);
+                state_.ready_version.clear();
+                state_.state = "idle";
+            }
+        }
+    }
+
+    void revoke_downgrade()
+    {
+        std::lock_guard lock(mutex_);
+        revoke_locked();
+    }
+
+    void channel_changed()
+    {
+        {
+            std::lock_guard lock(mutex_);
+            refresh_.invalidate();
+            revoke_locked();
+            // A staged download belongs to the previous selection. Re-resolve before offering it.
+            if (state_.state == "ready" && can_install() && remove_tree(updates_folder() / "ready"))
+            {
+                trace("update channel changed: the staged launcher {} was discarded", state_.ready_version);
+                state_.ready_version.clear();
+                state_.state = "idle";
+            }
+            state_.latest.reset();
+            state_.from_cache = false;
+            state_.cache_error.clear();
+            state_.error.clear();
+            if (state_.state != "checking" && state_.state != "downloading" && state_.state != "ready") state_.state = "idle";
+        }
+        // A check/download already running rechecks at its last line if its ticket was invalidated.
+        check();
+    }
+}
