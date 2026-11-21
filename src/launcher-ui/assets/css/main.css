@@ -1841,8 +1841,11 @@ html:not([data-color-uninstalled]) .library-card:not(.is-installed):not(.is-comi
 .page-section { display: block; padding: 24px 32px 40px; }
 .sidebar { width: 205px; flex: 0 0 205px; }
 .sidebar:hover { width: 205px; }
-.sidebar-brand-text, .sidebar .nav-label { opacity: 1; }
-.nav-item { font: inherit; text-align: left; width: 100%; margin: 3px 0; }
+.sidebar-brand-text, .sidebar:hover .sidebar-brand-text { opacity: 1; max-width: 160px; }
+.sidebar .nav-label, .sidebar:not(:hover) .nav-label { opacity: 1; width: auto; }
+.nav-item { font: inherit; text-align: left; width: 100%; margin: 3px 0; border: 0; background: transparent; }
+.nav-item:hover { background: var(--surface-hi); }
+.nav-item.active { background: var(--nav-active-bg); }
 .sidebar .nav-item .nav-label { position: static; transform: none; }
 .nav-icon { width: 22px; height: 22px; }
 .content-area { min-width: 0; overflow: auto; }
