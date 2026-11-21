@@ -5,6 +5,7 @@
 #include "ui_commands.hpp"
 #include "cef/cef_ui.hpp"
 #include "show23/setup_run.hpp"
+#include "show23/unpacker.hpp"
 #include "updater/launcher_update.hpp"
 #include "updater/part_store.hpp"
 #include "updater/release_source.hpp"
@@ -49,7 +50,9 @@ namespace commands
         };
         task verify;
         bool setup_busy{};
+        std::atomic_bool setup_canceled{};
         show23::setup_report setup_result;
+        std::jthread setup_worker;
 
         rapidjson::Value write_findings(const std::vector<show23::finding>& rows, rapidjson::Document::AllocatorType& allocator)
         {
@@ -78,6 +81,16 @@ namespace commands
             response.SetObject();
             auto& a = response.GetAllocator();
             response.AddMember("busy", busy, a);
+            response.AddMember("canCancel", busy && report.can_cancel, a);
+            response.AddMember("canceled", report.canceled, a);
+            if (report.extraction)
+            {
+                rapidjson::Value progress(rapidjson::kObjectType);
+                progress.AddMember("elapsed", report.extraction->elapsed, a);
+                progress.AddMember("written", report.extraction->written, a);
+                progress.AddMember("expected", report.extraction->expected, a);
+                response.AddMember("unpackProgress", progress, a);
+            }
             rapidjson::Value stages(rapidjson::kObjectType);
             for (std::size_t i = 0; i < report.stages.size(); ++i)
             {
@@ -181,6 +194,10 @@ namespace commands
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
                 response.AddMember("portable", utils::properties::is_portable(), a);
+                response.AddMember("unpacker", json(utils::properties::load(property_keys::UNPACKER).value_or(""), a), a);
+                const auto bundled = show23::find_unpacker({}, utils::properties::get_appdata_path() / "unpacker");
+                response.AddMember("bundledUnpacker", json(bundled.error ? std::string{} :
+                    utils::string::path_to_utf8(bundled.file.path), a), a);
                 response.AddMember("language", json(utils::properties::load(property_keys::LANGUAGE).value_or("en"), a), a);
                 response.AddMember("channel", rapidjson::StringRef(release_channel::channel_name(release_source::current_channel())), a);
             });
@@ -195,6 +212,9 @@ namespace commands
                 {
                     utils::properties::store(property_keys::OFFLINE_MODE, value);
                 }
+                else if (key == "unpacker" &&
+                         (value.empty() || show23::is_local_path(utils::string::utf8_to_path(value))))
+                    utils::properties::store(property_keys::UNPACKER, value);
                 else if (key == "channel" && (value == "stable" || value == "beta"))
                 {
                     {
@@ -316,6 +336,7 @@ namespace commands
                 response.AddMember("ready", set_up && parts::runtime_ready(runtime), a);
                 response.AddMember("setUp", set_up, a);
                 response.AddMember("gameMissing", missing, a);
+                response.AddMember("installedCopy", game.record && game.record->installed, a);
                 response.AddMember("sourcePath", json(utils::string::path_to_utf8(game.source_path), a), a);
                 response.AddMember("version", json(version, a), a);
                 response.AddMember("updated", updated, a);
@@ -335,7 +356,10 @@ namespace commands
                     kind == "package" ? show23::source_kind::package : show23::source_kind::folder,
                     utils::string::utf8_to_path(string(value, "base")),
                     update.empty() ? std::nullopt : std::optional(utils::string::utf8_to_path(update)),
-                    utils::string::utf8_to_path(string(value, "install"))
+                    utils::string::utf8_to_path(string(value, "install")),
+                    utils::string::utf8_to_path(utils::properties::load(property_keys::UNPACKER).value_or("")),
+                    string(value, "unpackerConsent"), string(value, "existingCopy"),
+                    string(value, "displayedUnpacker")
                 };
                 std::lock_guard lock(verify.mutex);
                 if (verify.busy || setup_busy)
@@ -346,16 +370,20 @@ namespace commands
                 setup_result = {};
                 setup_result.stages.front().state = show23::stage_state::running;
                 setup_busy = true;
+                setup_canceled = false;
                 verify.message.clear();
                 verify.findings.clear();
                 try
                 {
-                    std::thread([request]
+                    setup_worker = std::jthread([request]
                     {
                         show23::setup_report outcome;
                         try
                         {
-                            outcome = show23::run_setup(request, show23::default_setup_options(), [](const auto& latest)
+                            auto options = show23::default_setup_options();
+                            options.cancel = [] { return setup_canceled.load(); };
+                            options.require_preview = true;
+                            outcome = show23::run_setup(request, options, [](const auto& latest)
                             {
                                 std::lock_guard update(verify.mutex);
                                 setup_result = latest;
@@ -366,7 +394,7 @@ namespace commands
                         std::lock_guard completed(verify.mutex);
                         setup_result = std::move(outcome);
                         setup_busy = false;
-                    }).detach();
+                    });
                     response.SetObject();
                     response.AddMember("busy", true, response.GetAllocator());
                 }
@@ -381,6 +409,21 @@ namespace commands
             {
                 std::lock_guard lock(verify.mutex);
                 write_setup(response, setup_result, setup_busy);
+            });
+
+            ui.add_command("cancel-setup", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                const bool accepted = setup_busy && setup_result.can_cancel;
+                if (accepted) setup_canceled = true;
+                response.SetBool(accepted);
+            });
+
+            ui.add_command("remove-game-copy", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                const auto install = show23::install_folder();
+                response.SetBool(!setup_busy && !verify.busy && install && show23::remove_game_copy(*install));
             });
 
             ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)
@@ -463,6 +506,12 @@ namespace commands
     {
         if (string(value, "game") == show23::game_id) return game_entry{};
         return std::nullopt;
+    }
+
+    void stop_setup()
+    {
+        setup_canceled = true;
+        if (setup_worker.joinable()) setup_worker.join();
     }
 
     void register_all_commands(cef::cef_ui& ui)

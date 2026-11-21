@@ -1,6 +1,7 @@
 #include "std_include.hpp"
 #include "test.hpp"
 #include "check_inputs_cli.hpp"
+#include "package_setup_tests.hpp"
 
 #include <cstdio>
 
@@ -29,7 +30,9 @@ namespace tests
 
 int wmain(const int argc, wchar_t** argv)
 {
-    if (argc > 1) return run_check_inputs_cli(std::span(argv + 1, static_cast<std::size_t>(argc - 1)));
+    const auto args = std::span(argv, static_cast<std::size_t>(argc));
+    if (const auto fake = fake_unpacker(args)) return *fake;
+    if (argc > 1) return run_check_inputs_cli(args.subspan(1));
     auto failed_tests = 0;
     for (const auto& test : tests::registry())
     {

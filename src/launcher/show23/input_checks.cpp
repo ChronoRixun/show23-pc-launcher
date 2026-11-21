@@ -48,6 +48,7 @@ namespace show23
         {
             fs::path path;
             bool directory{};
+            std::uint64_t image_bytes{};
             std::optional<sfo_metadata> metadata;
             std::optional<std::uint64_t> needed;
         };
@@ -107,7 +108,8 @@ namespace show23
             const auto sfo_id_ok = !found.metadata || found.metadata->content_id.empty() || found.metadata->content_id == package.header.content_id;
             add(report, prefix + ".content", header_id_ok && sfo_id_ok ? passed : failed);
             if (found.metadata) found.metadata->content_id = package.header.content_id;
-            found.needed = expanded(package.header.image_size);
+            found.image_bytes = package.header.image_size;
+            found.needed = expanded(found.image_bytes);
         }
 
         void check_executable(checked_inputs& report, const std::string& prefix, const fs::path& folder,
@@ -305,6 +307,8 @@ namespace show23
         answer.request.kind = base.path.empty() ? request.kind : base.directory ? source_kind::folder : source_kind::package;
         if (!base.path.empty()) answer.request.base = base.path;
         if (!update.path.empty()) answer.request.update = update.path;
+        answer.base_image_bytes = base.image_bytes;
+        answer.update_image_bytes = update.image_bytes;
         answer.update_is_package = answer.has_update && !update.directory;
         check_destination(answer, base, update, options);
         return answer;

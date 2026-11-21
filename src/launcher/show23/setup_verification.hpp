@@ -31,6 +31,7 @@ namespace show23
         game_folder base;
         std::optional<game_folder> update;
         std::string created_utc;
+        bool installed{};
     };
 
     const folder_reference& reference_folder(bool update);

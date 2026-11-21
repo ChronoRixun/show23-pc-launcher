@@ -181,6 +181,8 @@ TEST(setup_in_place_publishes_record_before_marker_and_can_be_repeated_without_t
     CHECK(record && input_paths::contains(record->base.path, f.request.base));
     CHECK(record && record->update && input_paths::contains(record->update->path, *f.request.update));
     CHECK(remembered == 2);
+    CHECK(!remove_game_copy(f.request.install));
+    CHECK(inspect_game(f.request.install).state == record_state::ready);
     CHECK(fs::is_directory(f.request.install / "data/profiles/default/user"));
     CHECK(fs::is_directory(f.request.install / "data/profiles/default/server"));
     CHECK(fs::is_directory(f.request.install / "data/logs"));
@@ -188,7 +190,7 @@ TEST(setup_in_place_publishes_record_before_marker_and_can_be_repeated_without_t
     CHECK(snapshot(*f.request.update) == update);
 }
 
-TEST(setup_package_inputs_stop_at_unpack_without_creating_an_install)
+TEST(setup_without_unpacker_or_with_mixed_input_stops_without_creating_an_install)
 {
     fixture f;
     f.options.inputs.free_space = [](const auto&) { return 4 * allowance; };
@@ -205,7 +207,7 @@ TEST(setup_package_inputs_stop_at_unpack_without_creating_an_install)
         const auto report = run_setup(request, f.options);
         const auto& unpack = report.stages[index(setup_stage::unpack)];
         CHECK(unpack.state == stage_state::stopped);
-        CHECK(has(unpack.findings, "unpack.package", finding_state::later, "part", patch ? "update" : "base"));
+        CHECK(has(unpack.findings, patch ? "unpack.mixed" : "unpack.noProgram", finding_state::later));
         CHECK(!fs::exists(request.install));
     }
 }

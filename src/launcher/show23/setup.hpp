@@ -24,6 +24,10 @@ namespace show23
         fs::path base;
         std::optional<fs::path> update;
         fs::path install;
+        fs::path unpacker;
+        std::string unpacker_consent;
+        std::string existing_copy;
+        std::string displayed_unpacker;
     };
 
     enum class finding_state { passed, failed, notice, later };
@@ -44,6 +48,8 @@ namespace show23
         std::string base_version;
         bool has_update{};
         bool update_is_package{};
+        std::uint64_t base_image_bytes{};
+        std::uint64_t update_image_bytes{};
         std::string update_version;
         std::optional<std::uint64_t> needed_bytes;
         std::optional<std::uint64_t> available_bytes;

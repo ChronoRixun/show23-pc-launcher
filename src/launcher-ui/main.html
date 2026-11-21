@@ -88,6 +88,7 @@
                                 <button type="button" class="btn btn-primary btn-lg" id="setup-open" data-autofocus data-view-target="setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-box"></use></svg><span id="setup-open-label" data-i18n="game.setup">Set up</span></button>
                                 <button type="button" class="btn btn-secondary btn-lg" id="play" disabled><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span data-i18n="game.play">Play</span></button>
                                 <button type="button" class="btn btn-secondary" id="verify"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-shield"></use></svg><span data-i18n="game.verify">Verify Files</span></button>
+                                <button type="button" class="btn btn-ghost" id="remove-game-copy" hidden data-i18n="package.remove">Remove game copy</button>
                                 <button type="button" class="btn btn-secondary" id="mods" data-view-target="mods-panel"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-layers"></use></svg><span data-i18n="game.mods">Mods</span></button>
                             </div>
                         </div>
@@ -137,13 +138,21 @@
                                 <label class="field-label" id="base-label" for="base-path"><span class="step-num" aria-hidden="true">1</span><span data-i18n="setup.base">Base game</span></label>
                                 <div class="choice-row toggle-group" id="base-kind" role="radiogroup" aria-labelledby="base-label">
                                     <button type="button" class="choice toggle-btn on" id="base-folder" role="radio" aria-checked="true" tabindex="0" data-choice="folder"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.folderType">Unpacked folder</b><span data-i18n="setup.folderHelp">A folder you have already unpacked</span></span></button>
-                                    <button type="button" class="choice toggle-btn" id="base-package" role="radio" aria-checked="false" tabindex="-1" data-choice="package"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.packageType">Game package</b><span data-i18n="setup.packageHelp">This version can identify a package, but cannot unpack it.</span></span></button>
+                                    <button type="button" class="choice toggle-btn" id="base-package" role="radio" aria-checked="false" tabindex="-1" data-choice="package"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.packageType">Game package</b><span data-i18n="setup.packageHelp">Extract a package with a supported unpacker.</span></span></button>
                                 </div>
                                 <div class="row">
                                     <input class="path" id="base-path" type="text" data-i18n-placeholder="setup.noBase" placeholder="No base game chosen" readonly>
                                     <button type="button" class="btn btn-secondary" id="base-choose">Choose folder</button>
                                 </div>
                                 <p id="base-hint" class="hint" role="status" hidden></p>
+                            </div>
+                            <div class="field" id="setup-unpacker" hidden>
+                                <label for="setup-unpacker-path" data-i18n="package.program">Unpacker program</label>
+                                <div class="row">
+                                    <input id="setup-unpacker-path" class="path" type="text" readonly>
+                                    <button type="button" class="btn btn-secondary" id="setup-unpacker-pick" data-i18n="setup.browse">Browse</button>
+                                    <button type="button" class="btn btn-ghost" id="setup-unpacker-clear" data-i18n="common.clear">Clear</button>
+                                </div>
                             </div>
                             <div class="field">
                                 <label class="field-label" for="update-path"><span class="step-num" aria-hidden="true">2</span><span data-i18n="setup.update">1.21 update</span><span class="opt" data-i18n="setup.optional">Optional</span></label>
@@ -190,7 +199,10 @@
                             </li>
                             </ol>
                             <div class="progress stage-progress" id="setup-pending" role="progressbar" aria-busy="true" aria-labelledby="setup-title"><i></i></div>
-                            <div class="alert" id="setup-alert" role="alert" hidden><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use id="setup-stop-icon" href="#icon-alert"></use></svg><div><h3 id="setup-status"></h3><p data-i18n="setup.stopNote">No game files were unpacked or changed.</p></div></div>
+                            <p id="running-unpacker" class="hint game-source-notice" hidden></p>
+                            <p id="unpack-progress" class="hint" hidden></p>
+                            <button type="button" class="btn btn-secondary" id="cancel-unpack" hidden data-i18n="common.cancel">Cancel</button>
+                            <div class="alert" id="setup-alert" role="alert" hidden><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use id="setup-stop-icon" href="#icon-alert"></use></svg><div><h3 id="setup-status"></h3><p id="setup-stop-note" data-i18n="setup.stopNote">No game files were unpacked or changed.</p></div></div>
                             <section id="setup-checklist" class="setup-checklist" aria-labelledby="setup-checklist-title" hidden>
                                 <h2 class="section-h" id="setup-checklist-title" data-i18n="checks.heading">Input checklist</h2>
                                 <ul id="setup-findings"></ul>
@@ -243,6 +255,14 @@
                         </section>
                         <section class="panel">
                             <h2 class="section-h" data-i18n="settings.general">General</h2>
+                            <div class="field">
+                                <label for="settings-unpacker-path" data-i18n="package.program">Unpacker program</label>
+                                <div class="row">
+                                    <input id="settings-unpacker-path" class="path" type="text" readonly>
+                                    <button type="button" class="btn btn-secondary" id="settings-unpacker-pick" data-i18n="setup.browse">Browse</button>
+                                    <button type="button" class="btn btn-ghost" id="settings-unpacker-clear" data-i18n="common.clear">Clear</button>
+                                </div>
+                            </div>
                             <div class="set-row set-location">
                                 <div><span class="set-name" id="location-label" data-i18n="settings.mode">Data location</span><span class="set-help" data-i18n="settings.locationHelp">Installed keeps data in AppData. Portable keeps it next to the launcher.</span></div>
                                 <div class="seg toggle-group" id="location" role="radiogroup" aria-labelledby="location-label">

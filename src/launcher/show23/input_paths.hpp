@@ -22,7 +22,7 @@ namespace show23::input_paths
         handle& operator=(handle&& other) noexcept;
 
         HANDLE get() const { return value_; }
-        explicit operator bool() const { return value_ != INVALID_HANDLE_VALUE; }
+        explicit operator bool() const { return value_ != INVALID_HANDLE_VALUE && value_ != nullptr; }
 
     private:
         HANDLE value_{INVALID_HANDLE_VALUE};

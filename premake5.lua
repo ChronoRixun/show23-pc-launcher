@@ -194,7 +194,8 @@ files {"./src/tests/**.hpp", "./src/tests/**.cpp",
        "./src/launcher/show23/sfo.cpp", "./src/launcher/show23/package_header.cpp",
        "./src/launcher/show23/input_paths.cpp", "./src/launcher/show23/input_checks.cpp",
        "./src/launcher/show23/setup.cpp", "./src/launcher/show23/setup_verification.cpp",
-       "./src/launcher/show23/game_record.cpp", "./src/launcher/show23/setup_run.cpp"}
+       "./src/launcher/show23/game_record.cpp", "./src/launcher/show23/setup_run.cpp",
+       "./src/launcher/show23/unpacker.cpp"}
 includedirs {"./src/common", "./src/tests", "./src/launcher", path.join(dependencies.basePath, "rapidjson/include")}
 defines {"RAPIDJSON_HAS_STDSTRING", "NOMINMAX"}
 links {"common"}

@@ -119,7 +119,7 @@ namespace show23
         out.StartObject();
         out.Key("schema"); out.Int(1);
         out.Key("title_id"); out.String(title_id);
-        out.Key("mode"); out.String("in_place");
+        out.Key("mode"); out.String(record.installed ? "installed" : "in_place");
         out.Key("base"); write_folder(out, record.base);
         if (record.update) { out.Key("update"); write_folder(out, *record.update); }
         out.Key("created_utc"); text(out, record.created_utc);
@@ -135,15 +135,32 @@ namespace show23
         source_path = read_path(field(field(doc, "base"), "path"));
         const auto& schema = field(doc, "schema");
         const bool updated = doc.HasMember("update");
+        const auto mode = string(field(doc, "mode"));
         const auto created = string(field(doc, "created_utc"));
         if (doc.MemberCount() != (updated ? 6u : 5u) || !schema.IsInt() || schema.GetInt() != 1 ||
-            string(field(doc, "mode")) != "in_place" || string(field(doc, "title_id")) != title_id || !utc(created))
+            (mode != "in_place" && mode != "installed") || string(field(doc, "title_id")) != title_id || !utc(created))
             return std::nullopt;
         auto base = read_folder(field(doc, "base"), false);
         if (!base) return std::nullopt;
         auto update = updated ? read_folder(field(doc, "update"), true) : std::nullopt;
         if (updated && !update) return std::nullopt;
-        return game_record{std::move(*base), std::move(update), std::string(created)};
+        return game_record{std::move(*base), std::move(update), std::string(created), mode == "installed"};
+    }
+
+    fs::path game_directory(const fs::path& install)
+    {
+        return install / "data" / "games" / title_id;
+    }
+
+    bool installed_paths_match(const game_record& record, const fs::path& install)
+    {
+        const auto root = game_directory(install);
+        const auto same = [](const fs::path& a, const fs::path& b)
+        {
+            return input_paths::contains(a, b) && input_paths::contains(b, a);
+        };
+        return record.installed && same(record.base.path, root / "base") &&
+            (!record.update || same(record.update->path, root / "update"));
     }
 
     game_presence inspect_game(const fs::path& install)
@@ -160,6 +177,8 @@ namespace show23
             result.record.reset();
             return result;
         }
+        if (result.record && result.record->installed && !installed_paths_match(*result.record, install))
+            result.record.reset();
         if (!result.record || !executable_present(result.record->base)) return result;
         if (result.record->update && !executable_present(*result.record->update))
         {

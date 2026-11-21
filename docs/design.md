@@ -12,3 +12,12 @@ The desktop interface and update model follow the companion project's [launcher 
 | [release-manifest.md](release-manifest.md) | Release assets, compatibility rules and install records |
 
 Setup uses verified unpacked folders in place. The install folder contains launcher files, including `data/games/CUSA35521/game.json`. Setup writes the game record before `manifests/game-ready.txt`, then remembers the install folder. Startup checks that the marker and record are valid and that each recorded executable still exists at the saved size. Verify Files rechecks both folders and checks any installed runtime against its manifests. Repair and runtime installation are pending. Mods handles local pack folders and their enabled state. Pack schema validation and loading belong to the runtime.
+
+
+## Package setup
+
+Package setup extracts into a uniquely named staging folder beneath the selected install's game directory. After the same folder verification used for an in-place install, it moves the verified base and optional update into the game directory, writes a record with mode "installed", and publishes the ready marker last. The previous installed copy is moved aside during publication and the launcher rolls it back if publication fails. The Home removal action applies only to an installed copy and keeps the original packages, profiles, logs and other launcher data.
+
+Choosing a player-supplied unpacker is a trust decision. Before running it, the launcher shows the full path and asks for consent to run the executable with the player's permissions. Consent is remembered for that path and SHA-256. A bundled program uses the release's trust and needs no separate consent. The job controls process lifetime, and the launcher validates the extraction result and checks for direct sibling writes. This is not a filesystem sandbox.
+
+The supplied program takes precedence over a bundled program. For portable releases, put unpacker/orbis-unpkg.exe or unpacker/ps4-pkg-tool.exe in the show23-pc data directory beside the launcher executable. For installed mode, put it in %LOCALAPPDATA%/show23-pc/unpacker. If both are bundled, the launcher tries orbis-unpkg.exe first.

@@ -78,6 +78,7 @@
             setUp && !ready ? t('inPlace.runtimeMissing') : '';
         status('game-source-notice', sourceMessage);
         $('play').disabled = !ready;
+        $('remove-game-copy').hidden = !game.installedCopy;
         $('play').classList.toggle('btn-primary', ready);
         $('play').classList.toggle('btn-secondary', !ready);
         if (ready) $('play').setAttribute('data-autofocus', '');
@@ -136,9 +137,18 @@
         $('setup-continue').disabled = state.setupBusy || !base || !$('install-path').value;
         $('update-clear').disabled = !$('update-path').value;
         const packageMode = state.sourceKind === 'package';
+        $('setup-unpacker').hidden = !packageMode;
+        paintUnpacker();
         $('base-choose').textContent = t(packageMode ? 'setup.package' : 'setup.folder');
         status('base-hint', base ? t(packageMode ? 'setup.packageSelected' : 'setup.folderSelected',
             { name: base.split(/[\\/]/).filter(Boolean).pop() }) : '');
+    }
+
+    function paintUnpacker() {
+        for (const view of ['setup', 'settings']) {
+            $(view + '-unpacker-path').value = state.settings.unpacker || state.settings.bundledUnpacker || '';
+            $(view + '-unpacker-clear').disabled = !state.settings.unpacker;
+        }
     }
 
     function showPicker(focusId) {
@@ -176,8 +186,10 @@
         const [scope, field] = row.id.split('.');
         const values = row.values || {};
         const part = t(values.part === 'update' ? 'checks.updateSource' : 'checks.baseSource');
-        if (scope === 'unpack') return t(field === 'inPlace' ? 'inPlace.usingFolder' :
-            values.part === 'update' ? 'inPlace.updatePackage' : 'inPlace.basePackage');
+        if (scope === 'unpack') {
+            if (field === 'inPlace') return t('inPlace.usingFolder');
+            return t('package.' + (field === 'program' ? 'runningProgram' : field), values);
+        }
         if (scope === 'settings' || scope === 'finish') return t('inPlace.' +
             (scope === 'settings' && field !== 'written' ? (field === 'tree' ? 'settingsTree' : 'settingsRecord') : field));
         if (scope === 'verify') {
@@ -291,6 +303,14 @@
                 ? label + ' · ' + findingText(detail) : label;
         }
         $('setup-pending').hidden = !busy;
+        $('cancel-unpack').hidden = !reply?.canCancel;
+        const program = stages.unpack?.findings?.find(row => row.id === 'unpack.program');
+        status('running-unpacker', busy && program ? findingText(program) : '');
+        const extraction = reply?.unpackProgress;
+        status('unpack-progress', busy && extraction ? t('package.progress', {
+            elapsed: extraction.elapsed, written: spaceText(extraction.written), expected: spaceText(extraction.expected)
+        }) : '');
+        $('setup-stop-note').hidden = state.sourceKind === 'package';
         $('setup-alert').hidden = busy || finished;
         $('setup-alert').classList.toggle('is-stopped', unpackStop);
         $('setup-stop-icon').setAttribute('href', unpackStop ? '#icon-info' : '#icon-alert');
@@ -300,7 +320,7 @@
         $('setup-done').hidden = !finished;
 
         const firstFailure = Object.values(stages).flatMap(stage => stage.findings || []).find(row => row.state === 'failed');
-        const stop = stages.unpack?.findings?.[0];
+        const stop = stages.unpack?.findings?.find(row => row.state === 'later');
         const message = (unpackStop && stop) ? findingText(stop) : firstFailure ? findingText(firstFailure) : '';
         $('setup-status').textContent = message;
         const input = showChecklist(stages.check?.findings || [], 'setup-findings', 'setup-checklist');
@@ -315,15 +335,45 @@
         state.setupBusy = true;
         try {
             showStage(null);
-            let reply = await run('setup-show23', {
+            const payload = {
                 kind: state.sourceKind, base: $('base-path').value,
-                update: $('update-path').value, install: $('install-path').value
-            });
-            while (reply?.busy) {
-                reply = await run('get-setup-inputs');
-                if (reply?.busy) { showStage(reply); await sleep(160); }
+                update: $('update-path').value, install: $('install-path').value,
+                displayedUnpacker: $('setup-unpacker-path').value
+            };
+            for (;;) {
+                $('cancel-unpack').disabled = false;
+                let reply = await run('setup-show23', { ...payload });
+                while (reply?.busy) {
+                    reply = await run('get-setup-inputs');
+                    if (reply?.busy) { showStage(reply); await sleep(160); }
+                }
+                if (reply?.canceled) {
+                    showPicker('base-choose');
+                    break;
+                }
+                showStage(reply || {});
+                const decision = reply?.stages?.unpack?.findings?.find(row =>
+                    ['unpack.consent', 'unpack.existing', 'unpack.preview'].includes(row.id));
+                if (!decision || reply.stages.unpack.state !== 'stopped') break;
+                const cancel = { label: t('common.cancel'), cancel: true };
+                if (decision.id === 'unpack.existing') {
+                    const choice = await window.showMessageBox(t('package.existingTitle'), findingText(decision),
+                        [cancel, t('package.keep'), t('package.replace')]);
+                    if (choice !== 1 && choice !== 2) break;
+                    payload.existingCopy = choice === 1 ? 'keep' : 'replace';
+                } else if (decision.id === 'unpack.consent') {
+                    const choice = await window.showMessageBox(t('package.consentTitle'), findingText(decision),
+                        [cancel, t('package.run')]);
+                    if (choice !== 1) break;
+                    payload.unpackerConsent = decision.values.consent;
+                    payload.displayedUnpacker = decision.values.path;
+                } else {
+                    payload.displayedUnpacker = decision.values.path;
+                    $('setup-unpacker-path').value = payload.displayedUnpacker;
+                    if (await window.showMessageBox(t('package.program'), findingText(decision),
+                        [cancel, t('setup.continue')]) !== 1) break;
+                }
             }
-            showStage(reply || {});
             await gameState();
         } catch (error) {
             console.error(error);
@@ -357,6 +407,7 @@
 
     function paintSettings() {
         const saved = state.settings;
+        paintUnpacker();
         window.IS_OFFLINE = !!saved.offline;
         window.LauncherI18n.setLanguage(saved.language || 'en');
         window.LauncherI18n.applyStaticTranslations();
@@ -544,6 +595,28 @@
     }
 
     function wireSetup() {
+        for (const view of ['setup', 'settings']) {
+            bind(view + '-unpacker-pick', 'click', async () => {
+                const path = await run('browse-file', { title: t('package.program'), filters: [
+                    { name: t('package.program'), pattern: '*.exe' }
+                ] });
+                if (path) await save('unpacker', path);
+            });
+            bind(view + '-unpacker-clear', 'click', () => save('unpacker', ''));
+        }
+        bind('cancel-unpack', 'click', async () => {
+            $('cancel-unpack').disabled = true;
+            if (!await run('cancel-setup')) $('cancel-unpack').disabled = false;
+        });
+        bind('remove-game-copy', 'click', async () => {
+            if (!state.game.installedCopy) return;
+            const choice = await window.showMessageBox(t('package.remove'), t('package.removeBody'),
+                [{ label: t('common.cancel'), cancel: true }, { label: t('package.remove'), danger: true }]);
+            if (choice !== 1) return;
+            const removed = await run('remove-game-copy');
+            await gameState();
+            status('game-status', t(removed ? 'package.removed' : 'package.removeFailed'));
+        });
         bind('setup-open', 'click', openSetup);
         bind('setup-back', 'click', () => returnHome('setup-open'));
         bind('setup-cancel', 'click', () => returnHome('setup-open'));

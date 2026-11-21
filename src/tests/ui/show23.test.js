@@ -191,30 +191,30 @@ async function submitChecklist(view) {
     await view.clock.advance(0);
 }
 
-test('setup: a base package stops at Unpack after listing the input findings', async () => {
+test('setup: a base package with no unpacker stops after listing the input findings', async () => {
     const view = open({ 'get-setup-inputs': setupResult({
         check: stage('done', [
             finding('base.version', 'passed', { version: '1.00' }),
             finding('base.executable', 'later'), finding('update.offline', 'notice')
         ]),
-        unpack: stage('stopped', [finding('unpack.package', 'later', { part: 'base' })])
+        unpack: stage('stopped', [finding('unpack.noProgram', 'later')])
     }) });
     await submitChecklist(view);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('done'), true);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="unpack"]').classList.contains('stopped'), true);
-    assert.match(view.id('setup-status').textContent, /cannot unpack the base game package/i);
+    assert.match(view.id('setup-status').textContent, /no unpacker.*unpacked folder/i);
     assert.equal(view.id('setup-findings').children.length, 3);
     assert.match(view.id('setup-findings').textContent, /1\.00/);
     assert.equal(view.id('setup-retry').hidden, true);
     assert.equal(view.document.activeElement, view.id('setup-edit'));
 });
 
-test('setup: a package update stops at Unpack with update-specific instructions', async () => {
+test('setup: a package update with a folder base stops at Unpack', async () => {
     const view = open({ 'get-setup-inputs': setupResult({
-        check: stage('done'), unpack: stage('stopped', [finding('unpack.package', 'later', { part: 'update' })])
+        check: stage('done'), unpack: stage('stopped', [finding('unpack.mixed', 'later')])
     }) });
     await submitChecklist(view);
-    assert.match(view.id('setup-status').textContent, /cannot unpack the update package.*choose the unpacked update folder/i);
+    assert.match(view.id('setup-status').textContent, /packages for both.*unpacked folders for both/i);
     assert.equal(view.id('setup-edit').hidden, false);
     assert.equal(view.id('setup-retry').hidden, true);
 });
@@ -320,4 +320,90 @@ test('show23: Verify Files displays game findings alongside the runtime message'
     assert.match(view.id('game-status').textContent, /No active runtime/);
     assert.match(view.id('game-verify-findings').textContent, /executable checksum matches/);
     assert.match(view.id('game-verify-findings').textContent, /FRONTEND has extra files/);
+});
+
+test('package source exposes the unpacker picker, folder source hides it', async () => {
+    const view = open();
+    await view.clock.advance(0);
+    view.id('setup-open').click();
+    assert.equal(view.id('setup-unpacker').hidden, true);
+    view.id('base-package').click();
+    assert.equal(view.id('setup-unpacker').hidden, false);
+    view.id('base-folder').click();
+    assert.equal(view.id('setup-unpacker').hidden, true);
+});
+
+test('package setup displays real byte progress and cancellation retains the selections', async () => {
+    let canceled = false;
+    const view = open({
+        'get-setup-inputs': () => ({
+            busy: !canceled, canceled, canCancel: !canceled,
+            unpackProgress: { elapsed: 4, written: 45, expected: 100 },
+            stages: { check: stage('done'), unpack: stage(canceled ? 'stopped' : 'running') }
+        }),
+        'cancel-setup': () => { canceled = true; return true; }
+    });
+    await submitChecklist(view);
+    assert.match(view.id('unpack-progress').textContent, /4.*45 B.*100 B/);
+    const base = view.id('base-path').value;
+    view.id('cancel-unpack').click();
+    await view.clock.advance(160);
+    assert.equal(view.id('setup-picker').hidden, false);
+    assert.equal(view.id('base-path').value, base);
+});
+
+test('installed copy offers removal only after confirmation', async () => {
+    const view = open({ 'get-show23': { setUp: true, installedCopy: true }, 'remove-game-copy': true });
+    await view.clock.advance(0);
+    let confirm;
+    view.window.showMessageBox = async (...args) => { confirm = args; return 0; };
+    view.id('remove-game-copy').click();
+    await view.clock.advance(0);
+    assert.match(confirm[0], /Remove game copy/);
+    assert.equal(view.requests.some(item => item.command === 'remove-game-copy'), false);
+    view.window.showMessageBox = async () => 1;
+    view.id('remove-game-copy').click();
+    await view.clock.advance(0);
+    assert.equal(view.requests.some(item => item.command === 'remove-game-copy'), true);
+});
+
+
+test('Home keeps Remove game copy hidden for in-place setup', async () => {
+    const view = open({ 'get-show23': { setUp: true, installedCopy: false } });
+    await view.clock.advance(0);
+    assert.equal(view.id('remove-game-copy').hidden, true);
+});
+
+
+test('package setup requests consent for the exact displayed file before retrying', async () => {
+    const path = 'Q:/Fixture/orbis-unpkg.exe';
+    let submissions = 0;
+    const view = open({
+        'setup-show23': () => ++submissions === 1
+            ? setupResult({ unpack: stage('stopped', [finding('unpack.consent', 'later', { path, consent: 'digest:path' })]) })
+            : setupResult({ unpack: stage('done'), finish: stage('done') })
+    });
+    let prompt;
+    view.window.showMessageBox = async (...args) => { prompt = args; return 1; };
+    await submitChecklist(view);
+    assert.ok(prompt[1].includes(path));
+    assert.match(prompt[1], /will run with your permissions/);
+    const calls = view.requests.filter(item => item.command === 'setup-show23');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].payload.unpackerConsent, undefined);
+    assert.equal(calls[1].payload.unpackerConsent, 'digest:path');
+});
+
+test('package setup passes the keep decision back to the installer', async () => {
+    let submissions = 0;
+    const view = open({
+        'setup-show23': () => ++submissions === 1
+            ? setupResult({ unpack: stage('stopped', [finding('unpack.existing', 'later')]) })
+            : setupResult({ unpack: stage('not_needed'), finish: stage('done') })
+    });
+    view.window.showMessageBox = async () => 1;
+    await submitChecklist(view);
+    const calls = view.requests.filter(item => item.command === 'setup-show23');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].payload.existingCopy, 'keep');
 });

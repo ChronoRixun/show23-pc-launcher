@@ -20,5 +20,6 @@ namespace commands
         std::optional<game_entry> get_game_config_from_request(const rapidjson::Value& value) const;
     };
 
+    void stop_setup();
     void register_all_commands(cef::cef_ui& cef_ui);
 }
