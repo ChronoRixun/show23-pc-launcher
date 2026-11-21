@@ -507,3 +507,7 @@ svg.icon { width: 16px; height: 16px; }
 .game-source-notice { overflow-wrap: anywhere; }
 
 #play-result-log { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+#player-name-dialog { position: fixed; z-index: 25; }
+.player-name-dialog-header { justify-content: space-between; }
+#first-player-name { width: 100%; margin-top: 12px; }

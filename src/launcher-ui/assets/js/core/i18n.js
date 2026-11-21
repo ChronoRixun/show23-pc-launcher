@@ -7,7 +7,7 @@
                 "save": "Save",
                 "savePlay": "Save and play",
                 "saved": "Player name saved.",
-                "malformed": "The emulator’s users.json is malformed. The launcher left it unchanged and started the game.",
+                "malformed": "The emulator’s users.json is malformed. The launcher left it unchanged and will continue starting the game.",
                 "unavailable": "The launcher could not update the player name in the emulator profile. The game can still start.",
                 "saveFailed": "The name could not be saved in launcher settings. You can try saving it again in Settings."
             },
@@ -457,7 +457,7 @@
                 "save": "Enregistrer",
                 "savePlay": "Enregistrer et jouer",
                 "saved": "Nom du joueur enregistré.",
-                "malformed": "Le fichier users.json de l’émulateur est mal formé. Le lanceur l’a laissé intact et a démarré le jeu.",
+                "malformed": "Le fichier users.json de l’émulateur est mal formé. Le lanceur l’a laissé intact et poursuit le démarrage du jeu.",
                 "unavailable": "Le lanceur n’a pas pu mettre à jour le nom dans le profil de l’émulateur. Le jeu peut quand même démarrer.",
                 "saveFailed": "Le nom n’a pas pu être enregistré dans les paramètres du lanceur. Vous pouvez réessayer dans les paramètres."
             },
@@ -901,7 +901,7 @@
                 "save": "Guardar",
                 "savePlay": "Guardar y jugar",
                 "saved": "Nombre del jugador guardado.",
-                "malformed": "El archivo users.json del emulador no es válido. El iniciador lo dejó sin cambios e inició el juego.",
+                "malformed": "El archivo users.json del emulador no es válido. El iniciador lo dejó sin cambios y continuará iniciando el juego.",
                 "unavailable": "El iniciador no pudo actualizar el nombre en el perfil del emulador. El juego aún puede iniciarse.",
                 "saveFailed": "No se pudo guardar el nombre en la configuración del iniciador. Puedes volver a intentarlo en Configuración."
             },
@@ -1345,7 +1345,7 @@
                 "save": "Сохранить",
                 "savePlay": "Сохранить и играть",
                 "saved": "Имя игрока сохранено.",
-                "malformed": "Файл users.json эмулятора повреждён. Программа запуска оставила его без изменений и запустила игру.",
+                "malformed": "Файл users.json эмулятора повреждён. Программа запуска оставила его без изменений и продолжит запуск игры.",
                 "unavailable": "Не удалось обновить имя в профиле эмулятора. Игру всё равно можно запустить.",
                 "saveFailed": "Не удалось сохранить имя в настройках программы запуска. Попробуйте ещё раз в настройках."
             },
