@@ -11,6 +11,7 @@
         page: 'show23', settings: {}, game: {}, parts: {}, mods: null,
         play: {}, followingPlay: false, startingPlay: false, followingRuntime: false, confirmingClose: false,
         sourceKind: 'folder', setupBusy: false, setupDetails: '', location: 'installed',
+        cards: {}, startingCards: false, followingCards: false,
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
 
@@ -81,17 +82,17 @@
             game.checkingRuntime ? t('play.runtimeChecking') :
             setUp && !ready ? t('inPlace.runtimeMissing') : game.updated ? t('play.baseOnly') : '';
         status('game-source-notice', sourceMessage);
-        $('play').disabled = !ready || active || state.startingPlay;
+        $('play').disabled = !ready || active || state.startingPlay || state.cards.busy || state.startingCards;
         $('play').hidden = active;
         $('stop-play').hidden = !active;
         $('stop-play').disabled = phase === 'stopping';
-        $('verify').disabled = active || !!game.checkingRuntime;
-        $('remove-game-copy').hidden = !game.installedCopy || active;
+        $('verify').disabled = active || !!game.checkingRuntime || !!state.cards.busy;
+        $('remove-game-copy').hidden = !game.installedCopy || active || !!state.cards.busy;
         $('play').classList.toggle('btn-primary', ready);
         $('play').classList.toggle('btn-secondary', !ready);
         if (ready && !active) $('play').setAttribute('data-autofocus', '');
         else $('play').removeAttribute('data-autofocus');
-        $('setup-open').hidden = active || !!game.checkingRuntime || (ready && !game.installedCopy);
+        $('setup-open').hidden = active || !!state.cards.busy || !!game.checkingRuntime || (ready && !game.installedCopy);
         const setupLabel = setUp || missing ? 'inPlace.setUpAgain' : 'game.setup';
         $('setup-open-label').setAttribute('data-i18n', setupLabel);
         $('setup-open-label').textContent = t(setupLabel);
@@ -102,6 +103,7 @@
         $('home-ready').hidden = !ready;
         $('scorebug').hidden = !ready;
 
+        paintCards();
         const meta = $('game-meta');
         meta.textContent = '';
         if (!setUp) {
@@ -140,6 +142,7 @@
                 if (state.game.ready) await refreshParts();
             } finally { state.followingRuntime = false; }
         }
+        await refreshCards();
         if (state.game.ready) {
             const folder = state.game.folder;
             const result = await run('get-mods', { game: 'show23' });
@@ -148,6 +151,83 @@
                 state.mods = { enabled: mods.filter(mod => mod.enabled).length, total: mods.length };
                 paintHome();
             }
+        }
+    }
+
+    function paintCards() {
+        const card = state.cards;
+        const blocked = state.settings.offline || state.settings.offlineSaved ? 'offline' :
+            state.startingPlay || (state.play.phase && state.play.phase !== 'idle') ? 'playing' :
+            card.blocked || (!state.game.ready ? 'setup' : '');
+        const imported = card.date && Number.isSafeInteger(card.cards);
+        const locale = window.LauncherI18n.getLanguage();
+        const date = imported && new Date(card.date + 'T00:00:00Z');
+        status('cards-status', imported && Number.isFinite(+date) ? t('cards.imported', {
+            count: new Intl.NumberFormat(locale).format(card.cards),
+            date: new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : locale, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date)
+        }) : t('cards.none'));
+        const button = $('import-cards');
+        const action = 'cards.' + (imported ? 'update' : 'start');
+        button.setAttribute('data-i18n', action);
+        button.textContent = t(action);
+        button.disabled = !!(blocked || card.busy || state.startingCards);
+        status('cards-blocked', blocked && !card.busy ? t('cards.' + blocked) : '');
+        $('cancel-card-import').hidden = !card.busy;
+        $('cancel-card-import').disabled = !!card.canceling;
+        $('cards-progress-row').hidden = !(card.busy || state.startingCards);
+        const progress = $('cards-progress');
+        if (card.busy && card.total) {
+            progress.setAttribute('max', String(card.total));
+            progress.setAttribute('value', String(card.page));
+        } else progress.removeAttribute('value');
+        status('cards-progress-text', t(card.canceling ? 'cards.canceling' :
+            card.total ? 'cards.progress' : 'cards.preparing', card));
+        status('cards-result', card.result && card.result !== 'complete' ? t('cards.' + card.result, { path: card.log || '' }) : '');
+    }
+
+    async function refreshCards() {
+        state.cards = await run('get-card-import') || {};
+        paintHome();
+    }
+
+    async function startCards() {
+        if (state.startingCards || state.followingCards || state.cards.busy) return;
+        state.startingCards = true;
+        paintHome();
+        try {
+            const result = await run('start-card-import');
+            if (result !== 'started') {
+                await refreshCards();
+                state.cards.result = result || 'launch';
+                return;
+            }
+            state.followingCards = true;
+            do {
+                await refreshCards();
+                if (!state.cards.busy) break;
+                await sleep(250);
+            } while (true);
+        } catch (error) {
+            state.cards.result = 'launch';
+            throw error;
+        } finally {
+            state.startingCards = false;
+            state.followingCards = false;
+            paintHome();
+        }
+    }
+
+    async function offerCardImport() {
+        const card = state.cards;
+        if (state.settings.cardsOffered || state.settings.offline || state.settings.offlineSaved || card.date ||
+            !state.game.ready || state.page !== 'setup') return;
+        state.settings.cardsOffered = true;
+        await run('save-setting', { key: 'cardsOffered', value: 'true' });
+        const answer = await window.showMessageBox(t('cards.offer'), t('cards.note'),
+            [{ label: t('cards.later'), cancel: true }, t('cards.import')]);
+        if (answer === 1) {
+            showPage('show23');
+            void startCards().catch(() => window.showToast(t('cards.launch'), 'error'));
         }
     }
 
@@ -352,6 +432,7 @@
     async function submitSetup() {
         if (state.setupBusy || !$('base-path').value || !$('install-path').value) return;
         state.setupBusy = true;
+        let finished = false;
         try {
             showStage(null);
             const payload = {
@@ -371,6 +452,7 @@
                     break;
                 }
                 showStage(reply || {});
+                finished = reply?.stages?.finish?.state === "done";
                 const decision = reply?.stages?.unpack?.findings?.find(row =>
                     ['unpack.consent', 'unpack.existing', 'unpack.preview'].includes(row.id));
                 if (!decision || reply.stages.unpack.state !== 'stopped') break;
@@ -401,6 +483,7 @@
             state.setupBusy = false;
             setupInputsChanged();
         }
+        if (finished) await offerCardImport();
     }
 
     async function verify() {
@@ -855,7 +938,7 @@
             }
         });
         bind('play', 'click', async () => {
-            if (state.followingPlay || state.startingPlay) return;
+            if (state.followingPlay || state.startingPlay || state.cards.busy || state.startingCards) return;
             state.startingPlay = true;
             $('play').disabled = true;
             try {
@@ -881,6 +964,13 @@
         bind('stop-play', 'click', async () => {
             if (await run('stop-play')) $('stop-play').disabled = true;
             await followPlay();
+        });
+        bind('import-cards', 'click', startCards);
+        bind('cancel-card-import', 'click', async () => {
+            if (await run('cancel-card-import') && state.cards.busy) {
+                state.cards.canceling = true;
+                paintHome();
+            }
         });
         bind('verify', 'click', verify);
         bind('mods', 'click', () => {

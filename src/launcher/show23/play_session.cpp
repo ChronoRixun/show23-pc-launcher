@@ -3,6 +3,7 @@
 #include "play_session.hpp"
 #include "player_name.hpp"
 #include "child_process.hpp"
+#include "card_import.hpp"
 
 #include <iphlpapi.h>
 #include <utils/string.hpp>
@@ -138,6 +139,12 @@ namespace show23
         }
     }
 
+    bool local_server_ports_available()
+    {
+        const winsock network;
+        return network.ready && available(10000) && available(10080);
+    }
+
     const char* phase_name(play_phase phase)
     {
         return std::array{"idle", "checking", "certificates", "server", "playing", "stopping"}[static_cast<std::size_t>(phase)];
@@ -145,6 +152,8 @@ namespace show23
 
     play_result run_play(const play_request& request, const play_options& options)
     {
+        activity_lock lock;
+        if (!lock) return {"importOccupied"};
         const auto stopped = [&] { return options.stop && options.stop(); };
         const auto phase = [&](play_phase next) { if (options.phase) options.phase(next); };
         const auto profile = inspect(request.install / "data/profiles/default");

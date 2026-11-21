@@ -11,6 +11,7 @@ namespace property_keys
     constexpr auto UNPACKER = "show23-unpacker";
     constexpr auto UNPACKER_CONSENT = "show23-unpacker-consent";
     constexpr auto PLAYER_NAME = "show23-player-name";
+    constexpr auto CARDS_OFFERED = "show23-cards-offered";
     constexpr auto FULLSCREEN = "show23-fullscreen";
     constexpr auto INSTALL = "show23-install";
 }

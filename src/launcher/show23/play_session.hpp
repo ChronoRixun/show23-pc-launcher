@@ -37,6 +37,7 @@ namespace show23
         std::function<void(const char*)> warning;
     };
 
+    bool local_server_ports_available();
     const char* phase_name(play_phase phase);
     play_result run_play(const play_request& request, const play_options& options);
 }

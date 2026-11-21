@@ -6,6 +6,8 @@
 #include "cef/cef_ui.hpp"
 #include "show23/setup_run.hpp"
 #include "show23/play_session.hpp"
+#include "show23/card_import.hpp"
+#include "show23/server_paths.hpp"
 #include "show23/player_name.hpp"
 #include "show23/unpacker.hpp"
 #include "updater/launcher_update.hpp"
@@ -66,6 +68,109 @@ namespace commands
         std::optional<show23::fs::path> runtime_target;
         bool runtime_verified{};
         std::jthread runtime_worker;
+
+        std::atomic_bool importing_cards{};
+        std::atomic_bool cancel_cards{};
+        show23::card_progress card_progress;
+        show23::card_import_result card_result{};
+        std::optional<show23::fs::path> card_target;
+        std::jthread card_worker;
+
+        const char* card_import_block(const std::optional<show23::fs::path>& install)
+        {
+            if (utils::flags::has_flag("offline") || utils::properties::load(property_keys::OFFLINE_MODE) == "true")
+                return "offline";
+            if (play_active()) return "playing";
+            if (setup_busy || verify.busy || runtime_worker_busy) return "busy";
+            if (!install || show23::inspect_game(*install).state != show23::record_state::ready) return "setup";
+            if (runtime_target != install || !runtime_verified) return "runtime";
+            return nullptr;
+        }
+
+        void register_cards(cef::cef_ui& ui)
+        {
+            ui.add_command("get-card-import", [](const auto&, rapidjson::Document& response)
+            {
+                const auto install = show23::install_folder();
+                std::lock_guard lock(verify.mutex);
+                const auto latest = install ? show23::read_card_status(*install) : std::nullopt;
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("busy", importing_cards.load(), a);
+                response.AddMember("canceling", importing_cards.load() && cancel_cards.load(), a);
+                if (const auto blocked = card_import_block(install))
+                    response.AddMember("blocked", rapidjson::StringRef(blocked), a);
+                if (latest)
+                {
+                    response.AddMember("cards", latest->cards, a);
+                    response.AddMember("date", json(latest->date, a), a);
+                }
+                if (card_target != install) return;
+                response.AddMember("page", card_progress.page, a);
+                response.AddMember("total", card_progress.total, a);
+                if (card_result.status) response.AddMember("result", rapidjson::StringRef(card_result.status), a);
+                if (!card_result.log.empty()) response.AddMember("log", json(utils::string::path_to_utf8(card_result.log), a), a);
+            });
+
+            ui.add_command("start-card-import", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                const auto install = show23::install_folder();
+                if (importing_cards)
+                {
+                    response.SetString(rapidjson::StringRef("busy"));
+                    return;
+                }
+                if (const auto blocked = card_import_block(install))
+                {
+                    response.SetString(rapidjson::StringRef(blocked));
+                    return;
+                }
+                cancel_cards = false;
+                importing_cards = true;
+                card_target = install;
+                card_progress = {};
+                card_result = {};
+                try
+                {
+                    card_worker = std::jthread([install = *install]
+                    {
+                        show23::card_import_result outcome{"runtime"};
+                        try
+                        {
+                            const auto runtime = parts::read_runtime(install);
+                            std::string message;
+                            if (parts::verify_card_import_runtime(runtime, launcher_update::running_version(), message))
+                            {
+                                outcome = show23::import_cards(install, parts::component_folder(runtime, parts::id::server),
+                                    [] { return cancel_cards.load(); }, [](const auto& next)
+                                    {
+                                        std::lock_guard lock(verify.mutex);
+                                        card_progress = next;
+                                    });
+                            }
+                        }
+                        catch (...) {}
+                        std::lock_guard lock(verify.mutex);
+                        card_result = std::move(outcome);
+                        importing_cards = false;
+                    });
+                    response.SetString(rapidjson::StringRef("started"));
+                }
+                catch (...)
+                {
+                    importing_cards = false;
+                    response.SetString(rapidjson::StringRef("launch"));
+                }
+            });
+
+            ui.add_command("cancel-card-import", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                if (importing_cards) cancel_cards = true;
+                response.SetBool(importing_cards.load());
+            });
+        }
 
         void verify_runtime_for(const show23::fs::path& install)
         {
@@ -236,6 +341,7 @@ namespace commands
                 auto& a = response.GetAllocator();
                 const auto name = show23::normalize_player_name(utils::properties::load(property_keys::PLAYER_NAME).value_or(""));
                 response.AddMember("playerName", json(name.value_or(""), a), a);
+                response.AddMember("cardsOffered", utils::properties::load(property_keys::CARDS_OFFERED) == "true", a);
                 response.AddMember("fullscreen", utils::properties::load(property_keys::FULLSCREEN) == "true", a);
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
@@ -261,6 +367,8 @@ namespace commands
                     response.SetBool(name && utils::properties::load(property_keys::PLAYER_NAME) == name);
                     return;
                 }
+                else if (key == "cardsOffered" && value == "true")
+                    utils::properties::store(property_keys::CARDS_OFFERED, value);
                 else if (key == "fullscreen" && (value == "true" || value == "false"))
                     utils::properties::store(property_keys::FULLSCREEN, value);
                 else if (key == "offline" && (value == "true" || value == "false"))
@@ -324,8 +432,9 @@ namespace commands
             ui.add_command("restart-launcher-update", [](const auto&, rapidjson::Document& response)
             {
                 std::string error;
-                const auto success = !play_active() && launcher_update::restart(error);
+                const auto success = !play_active() && !card_import_active() && launcher_update::restart(error);
                 if (play_active()) error = "Stop the game before restarting the launcher.";
+                if (card_import_active()) error = "Cancel the card import before restarting the launcher.";
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("success", success, a);
@@ -390,7 +499,7 @@ namespace commands
                 const auto version = set_up ? (updated ? game.record->update->version : game.record->base.version) : std::string{};
                 {
                     std::lock_guard lock(verify.mutex);
-                    if (set_up && !setup_busy && !verify.busy && !play_active()) verify_runtime_for(*install);
+                    if (set_up && !setup_busy && !verify.busy && !play_active() && !importing_cards) verify_runtime_for(*install);
                     response.AddMember("checkingRuntime", set_up && runtime_worker_busy, a);
                     response.AddMember("ready", set_up && runtime_target == install && runtime_verified, a);
                 }
@@ -422,7 +531,7 @@ namespace commands
                     string(value, "displayedUnpacker")
                 };
                 std::lock_guard lock(verify.mutex);
-                if (verify.busy || setup_busy || runtime_worker_busy || play_active())
+                if (verify.busy || setup_busy || runtime_worker_busy || play_active() || importing_cards)
                 {
                     write_setup(response, setup_failure("check.busy"));
                     return;
@@ -483,14 +592,14 @@ namespace commands
             {
                 std::lock_guard lock(verify.mutex);
                 const auto install = show23::install_folder();
-                response.SetBool(!setup_busy && !verify.busy && !runtime_worker_busy && !play_active() && install && show23::remove_game_copy(*install));
+                response.SetBool(!setup_busy && !verify.busy && !runtime_worker_busy && !play_active() && !importing_cards && install && show23::remove_game_copy(*install));
             });
 
             ui.add_command("play-show23", [](const auto& value, rapidjson::Document& response)
             {
                 using enum show23::play_phase;
                 std::lock_guard lock(verify.mutex);
-                if (setup_busy || verify.busy || runtime_worker_busy || play_active())
+                if (setup_busy || verify.busy || runtime_worker_busy || play_active() || importing_cards)
                 {
                     response.SetBool(false);
                     return;
@@ -520,9 +629,10 @@ namespace commands
                                 {
                                     const auto runtime = parts::read_runtime(*install);
                                     const auto server_folder = parts::component_folder(runtime, parts::id::server);
+                                    const auto server = show23::server_paths(server_folder);
                                     const auto emulator_folder = parts::component_folder(runtime, parts::id::emulator);
                                     const show23::play_request request{*install, game.record->base.path,
-                                        server_folder / "python/python.exe", server_folder / "olserver.py",
+                                        server.python, server.script,
                                         emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true", name};
                                     show23::play_options options;
                                     options.stop = [] { return play_stop.load(); };
@@ -583,7 +693,7 @@ namespace commands
             {
                 std::lock_guard lock(verify.mutex);
                 response.SetBool(false);
-                if (verify.busy || setup_busy || runtime_worker_busy || play_active()) return;
+                if (verify.busy || setup_busy || runtime_worker_busy || play_active() || importing_cards) return;
                 verify.busy = true;
                 verify.message.clear();
                 verify.findings.clear();
@@ -656,10 +766,14 @@ namespace commands
         return play_status.load() != show23::play_phase::idle;
     }
 
+    bool card_import_active() { return importing_cards.load(); }
+
     void stop_workers()
     {
         setup_canceled = true;
         play_stop = true;
+        cancel_cards = true;
+        if (card_worker.joinable()) card_worker.join();
         if (play_worker.joinable()) play_worker.join();
         if (setup_worker.joinable()) setup_worker.join();
         if (runtime_worker.joinable()) runtime_worker.join();
@@ -675,6 +789,7 @@ namespace commands
         register_settings(ui);
         register_updates(ui);
         register_game(ui);
+        register_cards(ui);
         ui.add_command("confirm-launcher-started", [](const auto&, auto&) { launcher_update::confirm_started(); });
     }
 }

@@ -5,7 +5,7 @@ const stage = (state, findings = []) => ({ state, findings });
 const finding = (id, state, values = {}) => ({ id, state, values });
 const setupResult = stages => ({ busy: false, stages });
 
-function open(overrides = {}) {
+function open(overrides = {}, scripts = []) {
     const requests = [];
     const setup = {
         'get-settings': { playerName: 'Player', language: 'en', theme: 'default', offline: true, channel: 'stable' },
@@ -18,7 +18,7 @@ function open(overrides = {}) {
         ...overrides
     };
     const view = page({
-        scripts: ['core/i18n.js', 'core/focus-nav.js', 'app/mods-view.js', 'app/launcher-update.js', 'app/main.js'],
+        scripts: ['core/i18n.js', 'core/focus-nav.js', 'app/mods-view.js', 'app/launcher-update.js', ...scripts, 'app/main.js'],
         backend: { handle(command, payload) {
             requests.push({ command, payload });
             const reply = setup[command];
@@ -542,3 +542,140 @@ test('The profile warning appears alongside Play status and the exit result', as
     assert.match(view.id('play-result-text').textContent, /exited/);
     assert.equal(view.id('player-name-warning').hidden, false);
 });
+
+
+test('Cards shows import progress, then the completed count and date', async () => {
+    let running = false;
+    let done = false;
+    const view = open({
+        'get-settings': { language: 'en' },
+        'get-show23': { ready: true },
+        'get-card-import': () => done ? { result: 'complete', cards: 4101, date: '2026-11-21' } :
+            running ? { busy: true, page: 17, total: 165 } : {},
+        'start-card-import': () => { running = true; return 'started'; }
+    });
+    await view.clock.advance(0);
+    assert.match(view.id('cards-status').textContent, /not imported/i);
+    view.id('import-cards').click();
+    await view.clock.advance(0);
+    assert.equal(view.id('cards-progress').getAttribute('value'), '17');
+    assert.match(view.id('cards-progress-text').textContent, /17.*165/);
+    assert.equal(view.id('play').disabled, true);
+    done = true;
+    await view.clock.advance(250);
+    assert.match(view.id('cards-status').textContent, /4,101.*2026/);
+    assert.equal(view.id('import-cards').textContent, 'Update special cards');
+    assert.equal(view.id('play').disabled, false);
+});
+
+test('Cards reports a resumable network failure and supports Cancel', async () => {
+    let outcome = { result: 'network' };
+    const view = open({
+        'get-settings': { language: 'en' },
+        'get-show23': { ready: true },
+        'get-card-import': () => outcome,
+        'start-card-import': () => { outcome = { busy: true }; return 'started'; },
+        'cancel-card-import': () => { outcome = { result: 'canceled' }; return true; }
+    });
+    await view.clock.advance(0);
+    assert.match(view.id('cards-result').textContent, /finished pages are kept/i);
+    view.id('import-cards').click();
+    await view.clock.advance(0);
+    view.id('cancel-card-import').click();
+    await view.clock.advance(250);
+    assert.equal(view.id('cancel-card-import').hidden, true);
+    assert.match(view.id('cards-result').textContent, /canceled/i);
+});
+
+test('Cards explains why Offline mode or Play disables import', async () => {
+    for (const [offline, blocked, explanation] of [[true, 'offline', /offline/i], [false, 'playing', /stop.*game/i]]) {
+        const view = open({
+            'get-settings': { language: 'en', offline },
+            'get-show23': { ready: true },
+            'get-card-import': { blocked }
+        });
+        await view.clock.advance(0);
+        assert.equal(view.id('import-cards').disabled, true);
+        assert.match(view.id('cards-blocked').textContent, explanation);
+    }
+});
+
+
+test('Finishing setup offers optional import only once', async () => {
+    let submitted = false;
+    const view = open({
+        'get-settings': { language: 'en', offline: false, playerName: 'Player' },
+        'get-show23': () => ({ ready: submitted, setUp: submitted }),
+        'setup-show23': () => { submitted = true; return { busy: true }; },
+        'get-setup-inputs': setupResult({ finish: stage('done') }),
+        'save-setting': true,
+        'get-card-import': {}
+    });
+    await submitChecklist(view);
+    assert.equal(view.messages.length, 1);
+    assert.equal(view.messages[0][0], 'Import special cards now?');
+    assert.equal(view.requests.filter(row => row.command === 'start-card-import').length, 0);
+    assert.ok(view.requests.some(row => row.command === 'save-setting' && row.payload.key === 'cardsOffered'));
+    view.id('setup-done').click();
+    await view.clock.advance(0);
+    await submitChecklist(view);
+    assert.equal(view.messages.length, 1);
+});
+
+test('Cards displays the log path on other import failures', async () => {
+    const view = open({
+        'get-settings': { language: 'en' },
+        'get-show23': { ready: true },
+        'get-card-import': { result: 'failed', log: 'Q:/Fixture/card-import.log' }
+    });
+    await view.clock.advance(0);
+    assert.match(view.id('cards-result').textContent, /import failed.*card-import\.log/i);
+});
+
+
+if (process.env.SHOW23_CARD_UI_EVIDENCE === '1') {
+    test('Cards captures fixture states for review', async () => {
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const destination = path.resolve(__dirname, '../../../build/card-import-evidence');
+        fs.mkdirSync(destination, { recursive: true });
+        const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+        function markup(node) {
+            if (!node.tagName) return escape(node.textContent);
+            const tag = node.tagName.toLowerCase();
+            const attr = ['id', 'class', 'role', 'max', 'value', 'for', 'aria-labelledby', 'aria-modal']
+                .filter(key => node.hasAttribute(key)).map(key => ' ' + key + '="' + escape(node.getAttribute(key)) + '"').join('');
+            return '<' + tag + attr + (node.hidden ? ' hidden' : '') + (node.disabled ? ' disabled' : '') + '>' +
+                Array.from(node.childNodes, markup).join('') + '</' + tag + '>';
+        }
+        const css = fs.readFileSync(path.resolve(__dirname, '../../launcher-ui/assets/css/main.css'), 'utf8');
+        const complete = { cards: 4101, date: '2026-11-21' };
+        const states = {
+            empty: {}, importing: { busy: true, page: 73, total: 165 }, imported: complete,
+            network: { ...complete, result: 'network' }, offline: { blocked: 'offline' }, offer: {}
+        };
+        const rows = [];
+        for (const [name, cards] of Object.entries(states)) {
+            const view = open({
+                'get-settings': { language: 'en', playerName: 'Player' },
+                'get-show23': { ready: true, setUp: true },
+                'get-card-import': cards
+            }, ['ui/message-box.js']);
+            await view.clock.advance(0);
+            if (name === 'offer') {
+                const t = view.window.LauncherI18n.t;
+                void view.window.showMessageBox(t('cards.offer'), t('cards.note'),
+                    [{ label: t('cards.later'), cancel: true }, t('cards.import')]);
+                await view.clock.advance(0);
+            }
+            const panel = view.id('cards-title').parentNode;
+            const content = name === 'offer' ? view.id('message-box').querySelector('.dialog') : panel;
+            rows.push('<article><h2>' + escape(name) + '</h2>' + markup(content) + '</article>');
+        }
+        fs.writeFileSync(path.join(destination, 'cards-states.html'),
+            '<!doctype html><meta charset="utf-8"><title>Cards interface fixtures</title>' +
+                '<style>' + css + '\nbody{height:auto;overflow:auto;padding:24px;display:grid;gap:22px}' +
+                'article{max-width:760px}.dialog{position:relative}</style>' + rows.join(''), 'utf8');
+    });
+}

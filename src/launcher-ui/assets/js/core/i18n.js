@@ -1,6 +1,32 @@
 (function () {
     const translations = {
         "en": {
+            "cards": {
+                "serverRunning": "Stop the local server and free ports 10000 and 10080 before importing.",
+                "title": "Cards",
+                "note": "Downloads the card list and missing pictures from the publisher’s public website to this PC. About 10 MB, a few minutes.",
+                "none": "Special cards: not imported",
+                "imported": "Imported {{count}} cards on {{date}}",
+                "start": "Import special cards",
+                "update": "Update special cards",
+                "preparing": "Preparing import…",
+                "progress": "Page {{page}} of {{total}}",
+                "canceling": "Canceling…",
+                "network": "The connection failed. Try again; finished pages are kept.",
+                "failed": "The card import failed. Log: {{path}}",
+                "canceled": "Card import canceled. Finished pages are kept.",
+                "offline": "Turn off Offline mode to import special cards.",
+                "playing": "Stop the game to import special cards.",
+                "busy": "Wait for the current task to finish.",
+                "setup": "Set up the game to import special cards.",
+                "runtime": "The bundled runtime is unavailable or failed verification.",
+                "logUnavailable": "Could not open the import log in the install’s data/logs folder.",
+                "launch": "Could not start the card import.",
+                "occupied": "Another game session or import is active. Close it and try again.",
+                "offer": "Import special cards now?",
+                "later": "Later",
+                "import": "Import"
+            },
             "playerName": {
                 "label": "Player name",
                 "rules": "Use 3 to 16 letters (A–Z), digits, spaces, hyphens or underscores.",
@@ -12,6 +38,7 @@
                 "saveFailed": "The name could not be saved in launcher settings. You can try saving it again in Settings."
             },
             "play": {
+                "importOccupied": "Close the active card import or game session before starting Play.",
                 "stop": "Stop",
                 "fullscreen": "Fullscreen",
                 "checking": "Checking game and runtime…",
@@ -451,6 +478,32 @@
             }
         },
         "fr": {
+            "cards": {
+                "serverRunning": "Arrêtez le serveur local et libérez les ports 10000 et 10080 avant l’importation.",
+                "title": "Cartes",
+                "note": "Télécharge la liste des cartes et les images manquantes depuis le site public de l’éditeur vers ce PC. Environ 10 Mo et quelques minutes.",
+                "none": "Cartes spéciales : non importées",
+                "imported": "{{count}} cartes importées le {{date}}",
+                "start": "Importer les cartes spéciales",
+                "update": "Mettre à jour les cartes spéciales",
+                "preparing": "Préparation de l’importation…",
+                "progress": "Page {{page}} sur {{total}}",
+                "canceling": "Annulation…",
+                "network": "La connexion a échoué. Réessayez : les pages déjà récupérées sont conservées.",
+                "failed": "L’importation a échoué. Journal : {{path}}",
+                "canceled": "Importation annulée. Les pages déjà récupérées sont conservées.",
+                "offline": "Désactivez le mode hors ligne pour importer les cartes spéciales.",
+                "playing": "Arrêtez le jeu pour importer les cartes spéciales.",
+                "busy": "Attendez la fin de l’opération en cours.",
+                "setup": "Configurez le jeu pour importer les cartes spéciales.",
+                "runtime": "Les composants fournis sont indisponibles ou n’ont pas passé la vérification.",
+                "logUnavailable": "Impossible d’ouvrir le journal d’importation dans data/logs.",
+                "launch": "Impossible de démarrer l’importation.",
+                "occupied": "Une partie ou une importation est en cours. Fermez-la puis réessayez.",
+                "offer": "Importer les cartes spéciales maintenant ?",
+                "later": "Plus tard",
+                "import": "Importer"
+            },
             "playerName": {
                 "label": "Nom du joueur",
                 "rules": "Utilisez de 3 à 16 lettres (A–Z), chiffres, espaces, tirets ou traits de soulignement.",
@@ -462,6 +515,7 @@
                 "saveFailed": "Le nom n’a pas pu être enregistré dans les paramètres du lanceur. Vous pouvez réessayer dans les paramètres."
             },
             "play": {
+                "importOccupied": "Fermez l’importation ou la partie en cours avant de jouer.",
                 "stop": "Arrêter",
                 "fullscreen": "Plein écran",
                 "checking": "Vérification du jeu et des composants…",
@@ -895,6 +949,32 @@
             }
         },
         "es": {
+            "cards": {
+                "serverRunning": "Detén el servidor local y libera los puertos 10000 y 10080 antes de importar.",
+                "title": "Cartas",
+                "note": "Descarga la lista de cartas y las imágenes que faltan del sitio web público del editor a este PC. Unos 10 MB y unos minutos.",
+                "none": "Cartas especiales: sin importar",
+                "imported": "Se importaron {{count}} cartas el {{date}}",
+                "start": "Importar cartas especiales",
+                "update": "Actualizar cartas especiales",
+                "preparing": "Preparando la importación…",
+                "progress": "Página {{page}} de {{total}}",
+                "canceling": "Cancelando…",
+                "network": "Falló la conexión. Inténtalo de nuevo. Las páginas ya descargadas se conservan.",
+                "failed": "Falló la importación de cartas. Registro: {{path}}",
+                "canceled": "Se canceló la importación. Las páginas ya descargadas se conservan.",
+                "offline": "Desactiva el modo sin conexión para importar cartas especiales.",
+                "playing": "Detén el juego para importar cartas especiales.",
+                "busy": "Espera a que termine la tarea actual.",
+                "setup": "Configura el juego para importar cartas especiales.",
+                "runtime": "Los componentes incluidos no están disponibles o no pasaron la verificación.",
+                "logUnavailable": "No se pudo abrir el registro de importación en data/logs.",
+                "launch": "No se pudo iniciar la importación de cartas.",
+                "occupied": "Ya hay una partida o importación activa. Ciérrala e inténtalo de nuevo.",
+                "offer": "¿Importar las cartas especiales ahora?",
+                "later": "Más tarde",
+                "import": "Importar"
+            },
             "playerName": {
                 "label": "Nombre del jugador",
                 "rules": "Usa entre 3 y 16 letras (A–Z), números, espacios, guiones o guiones bajos.",
@@ -906,6 +986,7 @@
                 "saveFailed": "No se pudo guardar el nombre en la configuración del iniciador. Puedes volver a intentarlo en Configuración."
             },
             "play": {
+                "importOccupied": "Cierra la importación o la partida activa antes de jugar.",
                 "stop": "Detener",
                 "fullscreen": "Pantalla completa",
                 "checking": "Comprobando el juego y los componentes…",
@@ -1339,6 +1420,32 @@
             }
         },
         "ru": {
+            "cards": {
+                "serverRunning": "Перед импортом остановите локальный сервер и освободите порты 10000 и 10080.",
+                "title": "Карточки",
+                "note": "Загружает список карточек и недостающие изображения с открытого сайта издателя на этот ПК. Около 10 МБ и несколько минут.",
+                "none": "Особые карточки не импортированы",
+                "imported": "Импортировано карточек: {{count}} ({{date}})",
+                "start": "Импортировать особые карточки",
+                "update": "Обновить особые карточки",
+                "preparing": "Подготовка импорта…",
+                "progress": "Страница {{page}} из {{total}}",
+                "canceling": "Отмена…",
+                "network": "Ошибка подключения. Повторите попытку. Загруженные страницы сохраняются.",
+                "failed": "Не удалось импортировать карточки. Журнал: {{path}}",
+                "canceled": "Импорт отменён. Загруженные страницы сохранены.",
+                "offline": "Отключите автономный режим, чтобы импортировать особые карточки.",
+                "playing": "Остановите игру, чтобы импортировать особые карточки.",
+                "busy": "Дождитесь завершения текущей операции.",
+                "setup": "Настройте игру, чтобы импортировать особые карточки.",
+                "runtime": "Компоненты из комплекта недоступны или не прошли проверку.",
+                "logUnavailable": "Не удалось открыть журнал импорта в data/logs.",
+                "launch": "Не удалось запустить импорт карточек.",
+                "occupied": "Уже запущена игра или идёт импорт. Завершите операцию и повторите попытку.",
+                "offer": "Импортировать особые карточки сейчас?",
+                "later": "Позже",
+                "import": "Импортировать"
+            },
             "playerName": {
                 "label": "Имя игрока",
                 "rules": "Введите от 3 до 16 латинских букв (A–Z), цифр, пробелов, дефисов или знаков подчёркивания.",
@@ -1350,6 +1457,7 @@
                 "saveFailed": "Не удалось сохранить имя в настройках программы запуска. Попробуйте ещё раз в настройках."
             },
             "play": {
+                "importOccupied": "Перед запуском игры завершите импорт карточек или текущую игру.",
                 "stop": "Остановить",
                 "fullscreen": "Полноэкранный режим",
                 "checking": "Проверяется игра и компоненты…",

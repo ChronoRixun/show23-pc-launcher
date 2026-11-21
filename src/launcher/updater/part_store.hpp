@@ -21,6 +21,7 @@ namespace parts
     installed_runtime read_runtime(const std::filesystem::path& install, const std::string& release);
     bool stage_bundled_runtime(const std::filesystem::path& bundle, const std::filesystem::path& install,
                                std::string_view launcher_version);
+    bool verify_card_import_runtime(const installed_runtime& runtime, std::string_view launcher_version, std::string& message);
     bool verify_runtime(const installed_runtime& runtime, std::string_view launcher_version, std::string& message);
 
     bool ready(const installed_runtime& runtime);

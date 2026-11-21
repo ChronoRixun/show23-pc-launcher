@@ -93,6 +93,19 @@ namespace parts
         return runtime.root / name(part);
     }
 
+    bool verify_card_import_runtime(const installed_runtime& runtime, const std::string_view launcher_version, std::string& message)
+    {
+        if (!verify_runtime(runtime, launcher_version, message)) return false;
+        const auto& files = runtime.manifests[index(id::server)]->files;
+        for (const auto* required : {"python/python.exe", "olserver.py"})
+        {
+            if (std::ranges::any_of(files, [&](const auto& file) { return file.path == required; })) continue;
+            message = "The server manifest does not cover the card importer.";
+            return false;
+        }
+        return true;
+    }
+
     bool verify_runtime(const installed_runtime& runtime, const std::string_view launcher_version, std::string& message)
     {
         if (!runtime.error.empty()) { message = runtime.error; return false; }

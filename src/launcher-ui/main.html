@@ -114,6 +114,21 @@
                                 <li><span class="step-num" aria-hidden="true">3</span><div><strong data-i18n="game.beforeInstall">An install folder</strong><p data-i18n="game.beforeInstallHelp">On a local drive with at least 2 GiB free.</p></div></li>
                             </ol>
                         </section>
+                        <section class="panel cards-panel" aria-labelledby="cards-title">
+                            <h2 class="section-h" id="cards-title" data-i18n="cards.title">Cards</h2>
+                            <p id="cards-status" role="status"></p>
+                            <p class="hint" data-i18n="cards.note">Downloads the card list and missing pictures from the publisher's public website to this PC. About 10 MB, a few minutes.</p>
+                            <p id="cards-blocked" class="hint" hidden></p>
+                            <div id="cards-progress-row" hidden>
+                                <label id="cards-progress-text" for="cards-progress"></label>
+                                <progress id="cards-progress" max="1"></progress>
+                            </div>
+                            <p id="cards-result" class="status-line" role="status" hidden></p>
+                            <div class="actions">
+                                <button type="button" id="import-cards" class="btn btn-secondary" data-i18n="cards.start">Import special cards</button>
+                                <button type="button" id="cancel-card-import" class="btn btn-secondary" data-i18n="common.cancel" hidden>Cancel</button>
+                            </div>
+                        </section>
                         <div id="home-ready" hidden>
                             <div class="scorebug" id="scorebug" hidden>
                                 <div class="sb-lead"><div class="sb-label" data-i18n="nav.caption">Game</div><div class="sb-val" id="scorebug-game"></div><div class="sb-sub" id="scorebug-source"></div></div>
