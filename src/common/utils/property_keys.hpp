@@ -8,6 +8,5 @@ namespace property_keys
     constexpr auto OFFLINE_MODE = "launcher-offline-mode";
     constexpr auto UPDATE_CHANNEL = "launcher-update-channel";
     constexpr auto LANGUAGE = "launcher-language";
-    constexpr auto THEME = "launcher-theme";
     constexpr auto INSTALL = "show23-install";
 }

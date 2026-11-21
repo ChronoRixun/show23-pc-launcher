@@ -14,6 +14,7 @@
 #include <utils/property_keys.hpp>
 #include <utils/string.hpp>
 #include <shellapi.h>
+#include <chrono>
 #include <thread>
 
 namespace commands
@@ -51,15 +52,28 @@ namespace commands
             std::mutex mutex;
             bool busy{};
             unsigned generation{};
-            std::array<std::string, 3> messages;
+            std::array<release_channel::outcome, 3> releases;
+            std::chrono::system_clock::time_point checked;
         };
         update_state updates;
 
-        std::string describe(const release_channel::outcome& outcome)
+        void write_part_release(rapidjson::Value& row, rapidjson::Document::AllocatorType& allocator,
+                                const release_channel::outcome& outcome, const std::string& installed, const bool busy)
         {
-            if (!outcome.chosen) return outcome.error.empty() ? "No release has been published yet." : outcome.error;
-            const auto cached = outcome.from_cache ? " " + outcome.error : std::string{};
-            return "Release " + outcome.chosen->version + " found. Installing this part is not implemented in this version." + cached;
+            const char* state = busy ? "checking" : "idle";
+            if (outcome.chosen)
+            {
+                const auto& version = outcome.chosen->version;
+                state = outcome.from_cache ? "cached" : release_channel::compare(version, installed) > 0 || installed.empty() ?
+                    "available" : "up-to-date";
+                row.AddMember("availableVersion", json(version, allocator), allocator);
+            }
+            else if (!outcome.error.empty())
+            {
+                state = outcome.error.starts_with("No release") ? "unpublished" : "error";
+            }
+            row.AddMember("state", rapidjson::StringRef(state), allocator);
+            row.AddMember("status", json(outcome.error, allocator), allocator);
         }
 
         void check_parts()
@@ -72,27 +86,31 @@ namespace commands
                 if (updates.busy) return;
                 updates.busy = true;
                 generation = updates.generation;
-                updates.messages.fill({});
+                updates.releases.fill({});
             }
             try
             {
                 std::thread([channel, generation]
                 {
-                    std::array<std::string, 3> messages;
+                    std::array<release_channel::outcome, 3> releases;
                     try
                     {
                         const auto emulator = release_source::resolve(release_source::emulator_repo, channel,
                                                                      {"emulator.json", "SHA256SUMS.txt"}, true);
                         const auto shared = release_source::resolve_shared_parts(channel);
-                        messages = {describe(emulator), describe(shared[0]), describe(shared[1])};
+                        releases = {emulator, shared[0], shared[1]};
                     }
                     catch (const std::exception&)
                     {
-                        messages.fill("Could not check for updates.");
+                        for (auto& release : releases) release.error = "Could not check for updates.";
                     }
 
                     std::lock_guard lock(updates.mutex);
-                    if (generation == updates.generation) updates.messages = std::move(messages);
+                    if (generation == updates.generation)
+                    {
+                        updates.releases = std::move(releases);
+                        updates.checked = std::chrono::system_clock::now();
+                    }
                     updates.busy = false;
                 }).detach();
             }
@@ -100,7 +118,7 @@ namespace commands
             {
                 std::lock_guard lock(updates.mutex);
                 updates.busy = false;
-                updates.messages.fill("Could not start the update check.");
+                for (auto& release : updates.releases) release.error = "Could not start the update check.";
             }
         }
 
@@ -113,7 +131,6 @@ namespace commands
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
                 response.AddMember("portable", utils::properties::is_portable(), a);
-                response.AddMember("theme", json(utils::properties::load(property_keys::THEME).value_or("default"), a), a);
                 response.AddMember("language", json(utils::properties::load(property_keys::LANGUAGE).value_or("en"), a), a);
                 response.AddMember("channel", rapidjson::StringRef(release_channel::channel_name(release_source::current_channel())), a);
             });
@@ -124,8 +141,6 @@ namespace commands
                 const auto value = string(request, "value");
                 if (key == "language" && (value == "en" || value == "fr" || value == "es" || value == "ru"))
                     utils::properties::store(property_keys::LANGUAGE, value);
-                else if (key == "theme" && (value == "default" || value == "navy-gradient" || value == "dark"))
-                    utils::properties::store(property_keys::THEME, value);
                 else if (key == "offline" && (value == "true" || value == "false"))
                 {
                     utils::properties::store(property_keys::OFFLINE_MODE, value);
@@ -135,7 +150,8 @@ namespace commands
                     {
                         std::lock_guard lock(updates.mutex);
                         ++updates.generation;
-                        updates.messages.fill({});
+                        updates.releases.fill({});
+                        updates.checked = {};
                     }
                     release_source::set_channel(release_channel::parse_channel(value));
                     launcher_update::channel_changed();
@@ -214,6 +230,8 @@ namespace commands
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("busy", updates.busy, a);
+                const auto checked = std::chrono::duration_cast<std::chrono::milliseconds>(updates.checked.time_since_epoch()).count();
+                response.AddMember("checkedAt", static_cast<std::int64_t>(checked), a);
                 rapidjson::Value rows(rapidjson::kArrayType);
                 for (const auto part : parts::all)
                 {
@@ -225,7 +243,7 @@ namespace commands
                     row.AddMember("part", rapidjson::StringRef(parts::name(part)), a);
                     row.AddMember("version", json(version, a), a);
                     row.AddMember("prerelease", release_channel::is_prerelease(version), a);
-                    if (index) row.AddMember("status", json(updates.messages[index - 1], a), a);
+                    if (index) write_part_release(row, a, updates.releases[index - 1], version, updates.busy);
                     rows.PushBack(row, a);
                 }
                 response.AddMember("parts", rows, a);
@@ -240,7 +258,11 @@ namespace commands
                 const auto install = show23::install_folder();
                 response.SetObject();
                 auto& a = response.GetAllocator();
-                response.AddMember("ready", parts::ready(runtime), a);
+                const auto ready = install && parts::ready(runtime);
+                const auto game = ready ? parts::read_game_display(*install) : parts::game_display{};
+                response.AddMember("ready", ready, a);
+                response.AddMember("version", json(game.version, a), a);
+                response.AddMember("updated", game.updated, a);
                 response.AddMember("folder", json(install ? utils::string::path_to_utf8(*install) : std::string{}, a), a);
             });
 
@@ -271,7 +293,13 @@ namespace commands
                 }
                 const auto state = show23::begin_setup(request);
                 result(response, state.message);
-                response.AddMember("pending", state.state == show23::status::not_implemented, response.GetAllocator());
+                auto& a = response.GetAllocator();
+                response.AddMember("pending", state.state == show23::status::not_implemented, a);
+                response.AddMember("stage", "check", a);
+                response.AddMember("percent", 0, a);
+                rapidjson::Value log(rapidjson::kArrayType);
+                log.PushBack(json(state.message, a), a);
+                response.AddMember("log", log, a);
             });
 
             ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)

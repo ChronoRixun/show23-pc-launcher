@@ -180,7 +180,7 @@
     }
 
     function navigate(id) {
-        const item = document.getElementById(id) || document.querySelector(`.game-item[data-game="${id}"]`);
+        const item = document.querySelector(`[data-view-target="${id}"]`) || document.getElementById(id) || document.querySelector(`.game-item[data-game="${id}"]`);
         if (item) item.click();
     }
 
@@ -492,6 +492,11 @@
         if (action === 'back') {
             if (event.key === 'Backspace' && isTextField(element)) return false;
             if (layer) return closeLayer(layer);
+            const returnControl = activePage()?.querySelector('[data-page-back]');
+            if (returnControl) {
+                returnControl.click();
+                return true;
+            }
             return back();
         }
 
@@ -574,9 +579,13 @@
         const id = pageId(page);
         if (id && id !== currentPage) {
             const previous = currentPage;
-            if (currentPage && !goingBack && history[history.length - 1] !== currentPage) {
-                history.push(currentPage);
-                if (history.length > HISTORY_LIMIT) history.shift();
+            if (currentPage && !goingBack) {
+                const parent = document.getElementById(currentPage)?.dataset.pageParent;
+                if (id === parent && history[history.length - 1] === id) history.pop();
+                else if (history[history.length - 1] !== currentPage) {
+                    history.push(currentPage);
+                    if (history.length > HISTORY_LIMIT) history.shift();
+                }
             }
             currentPage = id;
             // From the keyboard, the focus follows a page change it was left behind by.

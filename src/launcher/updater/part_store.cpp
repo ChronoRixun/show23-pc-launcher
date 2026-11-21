@@ -2,6 +2,7 @@
 #include "part_store.hpp"
 #include "launcher_update.hpp"
 #include "show23/setup.hpp"
+#include "show23/game_version.hpp"
 
 #include <utils/cryptography.hpp>
 #include <utils/properties.hpp>
@@ -133,6 +134,14 @@ namespace parts
             if (part != id::launcher && (!runtime.manifests[index(part)] || !directory(component_folder(runtime, part)))) return false;
         }
         return true;
+    }
+
+    game_display read_game_display(const fs::path& install)
+    {
+        const auto game = install / "data" / "games" / show23::title_id;
+        const auto has_update = directory(game / "update");
+        const auto source = game / (has_update ? "update" : "base") / "sce_sys" / "param.sfo";
+        return {show23::parse_app_version(read_small(source, 64 * 1024)), has_update};
     }
 
     std::string verify_files(const installed_runtime& runtime)

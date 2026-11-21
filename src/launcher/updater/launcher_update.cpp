@@ -1356,6 +1356,7 @@ namespace launcher_update
             state_.latest.reset();
             state_.from_cache = false;
             state_.cache_error.clear();
+            state_.checked = {};
             state_.error.clear();
             if (state_.state != "checking" && state_.state != "downloading" && state_.state != "ready") state_.state = "idle";
         }

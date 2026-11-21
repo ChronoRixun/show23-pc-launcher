@@ -1,5 +1,7 @@
 # show23-pc launcher
 
+![Night Game artwork](docs/social-preview.png)
+
 A Windows launcher for running your own copy of MLB The Show 23 with the companion emulator build and local card-mode server. The launcher never downloads or distributes game files.
 
 ## Status
@@ -46,8 +48,10 @@ This is an unofficial fan project. It is not affiliated with Sony Interactive En
 
 ## Credits
 
-This launcher is adapted from [Ultimate Legends](https://github.com/ChronoRixun/ultimate-legends) by the same author. Ultimate Legends is a fork of the [CB Servers Launcher](https://github.com/CBServers/cb-launcher) by CB Servers (© 2026 CB Servers). Its foundation is the [XLabs Launcher](https://github.com/XLabsProject/launcher), originally developed by [momo5502](https://github.com/momo5502) and the XLabs team.
+This launcher is adapted from [Ultimate Legends](https://github.com/ChronoRixun/ultimate-legends) by the same author. Ultimate Legends is a fork of the [CB Servers Launcher](https://github.com/CBServers/cb-launcher) by CB Servers (© 2026 CB Servers). Its foundation is the [XLabs Launcher](https://github.com/XLabsProject/launcher), originally developed by [momo5502](https://github.com/momo5502) and the XLabs team. The lead author also added the scope guard’s cancellation method.
 
 ## Licence
+
+The interface bundles Oswald under the [SIL Open Font License 1.1](src/launcher-ui/assets/fonts/OFL.txt).
 
 The launcher is licensed under the [GNU General Public License v3.0](LICENSE).

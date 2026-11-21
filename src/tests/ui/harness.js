@@ -630,7 +630,7 @@ function mainBody() {
 function page({ scripts, backend, body = '', shell, clock = new Clock(), offline = false }) {
     const document = new Document();
     const html = mainBody();
-    const overlays = html.slice(html.indexOf('<span id="message-box"'));
+    const overlays = html.slice(html.indexOf('<div id="message-box"'));
     document.body.innerHTML = (shell === undefined ? html : shell + overlays) + body;
     const window = new Target();
     const logs = [];

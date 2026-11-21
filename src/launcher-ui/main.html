@@ -11,170 +11,269 @@
     <script defer src="./assets/js/core/focus-nav.js"></script>
     <script defer src="./assets/js/core/gamepad-nav.js"></script>
     <script defer src="./assets/js/ui/message-box.js"></script>
-    <script defer src="./assets/js/ui/dropdown.js"></script>
     <script defer src="./assets/js/ui/toast.js"></script>
     <script defer src="./assets/js/app/mods-view.js"></script>
     <script defer src="./assets/js/app/launcher-update.js"></script>
     <script defer src="./assets/js/app/main.js"></script>
 </head>
 <body>
-    <div class="window">
-        <div class="title-bar">
-            <span class="title-text">show23-pc launcher</span>
-            <div class="window-controls">
-                <button class="control-btn" id="minimize-button" data-i18n-title="window.minimize" title="Minimize"><span class="control-icon minimize-icon"></span></button>
-                <button class="control-btn" id="maximize-button" data-i18n-title="window.maximize" title="Maximize"><span class="control-icon maximize-icon"></span></button>
-                <button class="control-btn" id="close-button" data-i18n-title="window.close" title="Close"><span class="control-icon close-icon"></span></button>
+    <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+        <symbol id="icon-minus" viewBox="0 0 24 24"><path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-maximize" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-restore" viewBox="0 0 24 24"><path d="M8 5h11v11M5 8h11v11H5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M3 6h4m4 0h10M3 12h10m4 0h4M3 18h5m4 0h9M7 4h4v4H7zm6 6h4v4h-4zM8 16h4v4H8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-support" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 5a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM6 6l3 3m6 6 3 3M18 6l-3 3m-6 6-3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7z" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-box" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3zm0 9v9M4 7.5l8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 22s7-3 7-10V6l-7-3-7 3v6c0 7 7 10 7 10zm-3-10 2 2 4-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-check" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm-4 9 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3zm0 6v4m0 3v.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-info" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 8v5m0-8v.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5m4-.5A7 7 0 1 0 17 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-copy" viewBox="0 0 24 24"><path d="M9 9h11v11H9zM15 5V3H3v12h2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-down" viewBox="0 0 24 24"><path d="M12 4v16m-6-6 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 7h16m-10 0V4h4v3m-8 0 1 13h10l1-13m-8 4v5m4-5v5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </svg>
+    <div class="app window">
+        <header class="titlebar title-bar">
+            <img class="tb-mark" src="./assets/img/app-mark-32.png" alt="" draggable="false">
+            <span class="tb-name">show23-pc</span>
+            <span class="tb-sub" data-i18n="nav.launcher">Launcher</span>
+            <div class="tb-controls">
+                <button type="button" class="tb-btn" id="minimize-button" data-i18n-aria="window.minimize" aria-label="Minimize"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-minus"></use></svg></button>
+                <button type="button" class="tb-btn" id="maximize-button" data-i18n-aria="window.maximize" aria-label="Maximize"><svg class="icon maximize-glyph" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-maximize"></use></svg><svg class="icon restore-glyph" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-restore"></use></svg></button>
+                <button type="button" class="tb-btn close" id="close-button" data-i18n-aria="window.close" aria-label="Close"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-close"></use></svg></button>
             </div>
-        </div>
-        <div class="main-container">
-            <aside class="sidebar">
-                <div class="sidebar-brand">
-                    <div class="sidebar-logo"><img src="./assets/img/app-mark.png" alt=""></div>
-                    <div class="sidebar-brand-text">
-                        <span class="sidebar-brand-title">show23-pc</span>
-                        <span class="sidebar-brand-sub">Launcher</span>
-                    </div>
+        </header>
+        <div class="body">
+            <nav class="sidebar" data-i18n-aria="nav.launcher" aria-label="Launcher">
+                <div class="side-caption" data-i18n="nav.caption">Game</div>
+                <button type="button" id="show23" class="nav nav-item nav-game active" data-page="show23" aria-current="page">
+                    <img class="nav-thumb" src="./assets/img/show23-card.png" alt="" draggable="false">
+                    <span>MLB The Show 23</span>
+                </button>
+                <div class="side-spacer"></div>
+                <button type="button" id="settings" class="nav nav-item" data-page="settings"><svg class="nav-ico" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-settings"></use></svg><span data-i18n="settings.title">Settings</span></button>
+                <button type="button" id="support" class="nav nav-item" data-page="support"><svg class="nav-ico" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-support"></use></svg><span data-i18n="support.title">Support</span></button>
+                <footer class="side-foot">
+                    <div class="side-foot-row"><i class="dot ok" id="footer-channel-dot" aria-hidden="true"></i><span id="footer-channel"></span></div>
+                    <div class="side-foot-row mono" id="footer-version"></div>
+                </footer>
+            </nav>
+            <main class="main content-area" id="content">
+                <div class="update-bar" id="launcher-update-bar" hidden>
+                    <svg class="lead" aria-hidden="true" viewBox="0 0 24 24"><use id="launcher-update-icon" href="#icon-download"></use></svg>
+                    <span class="grow" id="launcher-update-text" role="status"></span>
+                    <div class="progress" id="launcher-update-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" data-i18n-aria="settings.updates" aria-label="Updates" hidden><i id="launcher-update-fill"></i></div>
+                    <button type="button" class="link-btn" id="launcher-update-notes" data-i18n="launcherUpdate.releaseNotes">Release notes</button>
+                    <button type="button" class="btn btn-sm btn-outline-accent" id="launcher-update-action"></button>
+                    <button type="button" class="icon-btn" id="launcher-update-dismiss" data-i18n-aria="launcherUpdate.later" aria-label="Later"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-close"></use></svg></button>
                 </div>
-                <nav class="nav-list" aria-label="Launcher">
-                    <button type="button" id="show23" class="nav-item active" data-page="show23" aria-current="page">
-                        <img class="nav-icon" src="./assets/img/app-mark.png" alt="">
-                        <span class="nav-label" data-i18n="nav.game">MLB The Show 23</span>
-                    </button>
-                    <button type="button" id="settings" class="nav-item" data-page="settings">
-                        <span class="nav-icon settings-icon"></span><span class="nav-label" data-i18n="settings.title">Settings</span>
-                    </button>
-                    <button type="button" id="support" class="nav-item" data-page="support">
-                        <span class="nav-icon support-icon"></span><span class="nav-label" data-i18n="support.title">Support</span>
-                    </button>
-                </nav>
-            </aside>
-            <main class="content-area">
-                <div class="launcher-update-bar" id="launcher-update-bar" hidden>
-                    <span class="launcher-update-text" id="launcher-update-text"></span>
-                    <div class="launcher-update-progress" id="launcher-update-progress" hidden><div class="launcher-update-fill" id="launcher-update-fill"></div></div>
-                    <button type="button" class="launcher-update-link" id="launcher-update-notes" data-i18n="launcherUpdate.releaseNotes">Release notes</button>
-                    <button type="button" class="launcher-update-btn" id="launcher-update-action"></button>
-                    <button type="button" class="launcher-update-dismiss" id="launcher-update-dismiss" data-i18n-title="launcherUpdate.later" title="Later">&times;</button>
-                </div>
-                <section id="show23-page" class="page-section game-page">
-                    <header class="show23-hero">
-                        <img class="show23-card" src="./assets/img/show23-card.png" alt="" width="512" height="768">
-                        <div>
-                            <h1>MLB The Show 23</h1>
-                            <p id="game-state" class="game-state" role="status"></p>
-                            <div class="show23-actions">
-                                <button type="button" class="settings-action-btn" id="setup-open" data-autofocus data-i18n="game.setup">Set up</button>
-                                <button type="button" class="settings-action-btn" id="play" disabled data-i18n="game.play">Play</button>
-                                <button type="button" class="settings-action-btn" id="verify" data-i18n="game.verify">Verify Files</button>
-                                <button type="button" class="settings-action-btn" id="mods" aria-controls="mods-panel" aria-expanded="false" data-i18n="game.mods">Mods</button>
+                <section id="show23-page" class="page-section">
+                    <header id="home-hero" class="hero is-unset">
+                        <img class="hero-card" src="./assets/img/show23-card.png" srcset="./assets/img/show23-card-2x.png 2x" width="150" height="225" alt="" draggable="false">
+                        <div class="hero-info">
+                            <span class="pill warn" id="game-pill" role="status"><i class="dot warn" id="game-state-dot" aria-hidden="true"></i><span id="game-state">Not set up</span></span>
+                            <h1 class="hero-title">MLB The Show 23</h1>
+                            <div class="hero-meta" id="game-meta"></div>
+                            <div class="actions">
+                                <button type="button" class="btn btn-primary btn-lg" id="setup-open" data-autofocus data-view-target="setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-box"></use></svg><span data-i18n="game.setup">Set up</span></button>
+                                <button type="button" class="btn btn-secondary btn-lg" id="play" disabled><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span data-i18n="game.play">Play</span></button>
+                                <button type="button" class="btn btn-secondary" id="verify"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-shield"></use></svg><span data-i18n="game.verify">Verify Files</span></button>
+                                <button type="button" class="btn btn-secondary" id="mods" data-view-target="mods-panel"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-layers"></use></svg><span data-i18n="game.mods">Mods</span></button>
                             </div>
                         </div>
                     </header>
-                    <p id="game-status" class="show23-status" role="status" hidden></p>
-                    <section id="setup" class="show23-panel" hidden>
-                        <h2 data-i18n="setup.title">Set up MLB The Show 23</h2>
-                        <label for="base-path" data-i18n="setup.base">Base game</label>
-                        <div class="setup-row">
-                            <input id="base-path" type="text" readonly>
-                            <button type="button" class="settings-action-btn" id="base-package" data-i18n="setup.package">Choose package</button>
-                            <button type="button" class="settings-action-btn" id="base-folder" data-i18n="setup.folder">Choose unpacked folder</button>
+                    <div class="home-details">
+                        <p class="status-line" id="game-status" role="status" hidden></p>
+                        <section id="home-before" class="panel">
+                            <h2 class="section-h" data-i18n="game.before">Before you start</h2>
+                            <ol class="before-list">
+                                <li><span class="step-num" aria-hidden="true">1</span><div><strong data-i18n="game.beforeGame">Your copy of the game</strong><p data-i18n="game.beforeGameHelp">The package file, or a folder you already unpacked.</p></div></li>
+                                <li><span class="step-num" aria-hidden="true">2</span><div><strong data-i18n="game.beforeUpdate">The 1.21 update</strong> <span class="faint" data-i18n="setup.optionalInline">(optional)</span><p data-i18n="game.beforeUpdateHelp">Its update package, if you have it.</p></div></li>
+                                <li><span class="step-num" aria-hidden="true">3</span><div><strong data-i18n="game.beforeInstall">An install folder</strong><p data-i18n="game.beforeInstallHelp">On a drive with room for the unpacked game.</p></div></li>
+                            </ol>
+                        </section>
+                        <div id="home-ready" hidden>
+                            <div class="scorebug" id="scorebug" hidden>
+                                <div class="sb-lead"><div class="sb-label" data-i18n="nav.caption">Game</div><div class="sb-val" id="scorebug-game"></div><div class="sb-sub" id="scorebug-source"></div></div>
+                                <div class="sb-cell" data-part="launcher"></div>
+                                <div class="sb-cell" data-part="emulator"></div>
+                                <div class="sb-cell" data-part="server"></div>
+                                <div class="sb-cell" data-part="profile"></div>
+                            </div>
+                            <div class="home-check spread">
+                                <span class="small faint" id="scorebug-checked"></span>
+                                <button type="button" class="btn btn-ghost btn-sm" id="manage-updates"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-right"></use></svg><span data-i18n="settings.manage">Manage updates</span></button>
+                            </div>
                         </div>
-                        <label for="update-path" data-i18n="setup.update">1.21 update package (optional)</label>
-                        <div class="setup-row">
-                            <input id="update-path" type="text" readonly>
-                            <button type="button" class="settings-action-btn" id="update-package" data-i18n="setup.pickUpdate">Choose update package</button>
-                            <button type="button" class="settings-action-btn" id="update-clear" data-i18n="common.clear">Clear</button>
-                        </div>
-                        <label for="install-path" data-i18n="setup.install">Install folder</label>
-                        <div class="setup-row">
-                            <input id="install-path" type="text" readonly>
-                            <button type="button" class="settings-action-btn" id="install-folder" data-i18n="setup.browse">Browse…</button>
-                        </div>
-                        <div class="show23-actions">
-                            <button type="button" class="settings-action-btn" id="setup-continue" disabled data-i18n="setup.continue">Continue</button>
-                            <button type="button" class="settings-action-btn" id="setup-cancel" data-i18n="common.cancel">Cancel</button>
-                        </div>
-                        <p id="setup-status" class="show23-status" role="status" hidden></p>
-                    </section>
-                    <section id="mods-panel" class="show23-panel" hidden>
-                        <h2 data-i18n="game.mods">Mods</h2>
-                        <div id="show23-mods-panel"></div>
-                    </section>
-                </section>
-                <section id="settings-page" class="page-section" hidden>
-                    <h1 data-i18n="settings.title">Settings</h1>
-                    <div class="show23-panel">
-                        <h2 data-i18n="settings.updates">Updates</h2>
-                        <div class="settings-row">
-                            <label for="channel" data-i18n="updateChannel.title">Update channel</label>
-                            <select class="setting-select" id="channel">
-                                <option value="stable" data-i18n="updateChannel.stable">Stable</option>
-                                <option value="beta" data-i18n="updateChannel.beta">Beta</option>
-                            </select>
-                        </div>
-                        <dl class="part-list" id="parts"></dl>
-                        <div class="show23-actions">
-                            <button type="button" class="settings-action-btn" id="check-parts" data-i18n="settings.check">Check for updates</button>
-                            <button type="button" class="settings-action-btn" id="switch-stable" hidden data-i18n="settings.goStable">Switch back to Stable</button>
-                        </div>
-                        <p class="show23-status" id="update-status" role="status" hidden></p>
-                    </div>
-                    <div class="show23-panel">
-                        <h2 data-i18n="settings.general">General</h2>
-                        <div class="settings-row">
-                            <label for="language" data-i18n="settings.language">Language</label>
-                            <select class="setting-select" id="language"><option value="en">English</option><option value="fr">Français</option><option value="es">Español</option><option value="ru">Русский</option></select>
-                        </div>
-                        <div class="settings-row">
-                            <label for="theme" data-i18n="settings.theme">Theme</label>
-                            <select class="setting-select" id="theme">
-                                <option value="default" data-i18n="settings.defaultTheme">Default</option>
-                                <option value="dark" data-i18n="settings.darkTheme">Dark</option>
-                                <option value="navy-gradient" data-i18n="settings.navyTheme">Navy</option>
-                            </select>
-                        </div>
-                        <div class="settings-row">
-                            <label for="offline" data-i18n="settings.offline">Offline mode</label>
-                            <input type="checkbox" id="offline">
-                        </div>
-                        <div class="settings-row" id="offline-status" hidden>
-                            <span data-i18n="settings.offlineActive">Offline mode is active.</span>
-                            <button type="button" class="settings-action-btn" id="restart-online" data-i18n="settings.restartOnline">Restart online</button>
-                        </div>
-                        <div class="settings-row">
-                            <span data-i18n="settings.mode">Data location</span><span id="data-mode"></span>
-                        </div>
-                        <button type="button" class="settings-action-btn" id="switch-mode" data-i18n="settings.applyMode">Change location and restart</button>
-                        <p class="show23-status" id="settings-status" role="status" hidden></p>
                     </div>
                 </section>
-                <section id="support-page" class="page-section" hidden>
-                    <h1 data-i18n="support.title">Support</h1>
-                    <div class="show23-panel">
-                        <h2 data-i18n="support.diagnostics">Diagnostics</h2>
-                        <p data-i18n="support.notice">Review the report before sharing it. The launcher keeps it on this device.</p>
-                        <div class="show23-actions">
-                            <button type="button" class="settings-action-btn" id="copy-diagnostics" data-i18n="support.copy">Copy diagnostics</button>
-                            <button type="button" class="settings-action-btn" id="refresh-diagnostics" data-i18n="support.refresh">Refresh</button>
-                            <button type="button" class="settings-action-btn" id="open-logs" data-i18n="support.logs">Open logs folder</button>
+
+                <section id="setup" class="page page-section" data-page-parent="show23" hidden>
+                    <header class="page-head">
+                        <nav class="crumb" data-i18n-aria="game.setup" aria-label="Set up"><button id="setup-back" type="button" data-page-back>MLB The Show 23</button><span aria-hidden="true">/</span><span data-i18n="game.setup">Set up</span></nav>
+                        <div>
+                            <h1 class="page-title" id="setup-title">Set up MLB The Show 23</h1>
+                            <p class="page-lede" id="setup-lede">Choose your copy of the game and where to install it.</p>
                         </div>
-                        <pre class="support-diagnostics" id="diagnostics" tabindex="0"></pre>
-                        <p id="support-status" class="show23-status" role="status" hidden></p>
+                    </header>
+                    <div id="setup-picker">
+                        <div class="panel">
+                            <div class="field">
+                                <label class="field-label" id="base-label" for="base-path"><span class="step-num" aria-hidden="true">1</span><span data-i18n="setup.base">Base game</span></label>
+                                <div class="choice-row toggle-group" id="base-kind" role="radiogroup" aria-labelledby="base-label">
+                                    <button type="button" class="choice toggle-btn on" id="base-package" role="radio" aria-checked="true" tabindex="0" data-choice="package"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.packageType">Game package</b><span data-i18n="setup.packageHelp">A single package file (.pkg)</span></span></button>
+                                    <button type="button" class="choice toggle-btn" id="base-folder" role="radio" aria-checked="false" tabindex="-1" data-choice="folder"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.folderType">Unpacked folder</b><span data-i18n="setup.folderHelp">A folder you have already unpacked</span></span></button>
+                                </div>
+                                <div class="row">
+                                    <input class="path" id="base-path" type="text" data-i18n-placeholder="setup.noBase" placeholder="No base game chosen" readonly>
+                                    <button type="button" class="btn btn-secondary" id="base-choose">Choose package</button>
+                                </div>
+                                <p id="base-hint" class="hint" role="status" hidden></p>
+                            </div>
+                            <div class="field">
+                                <label class="field-label" for="update-path"><span class="step-num" aria-hidden="true">2</span><span data-i18n="setup.update">1.21 update package</span><span class="opt" data-i18n="setup.optional">Optional</span></label>
+                                <div class="row"><input id="update-path" class="path" type="text" data-i18n-placeholder="setup.noUpdate" placeholder="No update package chosen" readonly><button type="button" class="btn btn-secondary" id="update-package"><span data-i18n="setup.pickUpdate">Choose update package</span></button><button type="button" class="btn btn-ghost" id="update-clear" disabled><span data-i18n="common.clear">Clear</span></button></div>
+                            </div>
+                            <div class="field">
+                                <label class="field-label" for="install-path"><span class="step-num" aria-hidden="true">3</span><span data-i18n="setup.install">Install folder</span></label>
+                                <div class="row"><input class="path" id="install-path" type="text" data-i18n-placeholder="setup.noInstall" placeholder="No install folder chosen" readonly><button type="button" class="btn btn-secondary" id="install-folder"><span data-i18n="setup.browse">Browse…</span></button></div>
+                                <p class="hint" data-i18n="setup.installHint">Choose a destination on a local drive.</p>
+                            </div>
+                        </div>
+                        <footer class="setup-footer spread">
+                            <span class="small faint" data-i18n="setup.changeLater">You can change these choices by running Set up again.</span>
+                            <div class="actions"><button type="button" class="btn btn-ghost" id="setup-cancel"><span data-i18n="common.cancel">Cancel</span></button><button type="button" class="btn btn-primary" id="setup-continue" disabled><span data-i18n="setup.continue">Continue</span></button></div>
+                        </footer>
                     </div>
+                    <div id="setup-progress" class="setup-progress" hidden>
+                        <div class="panel">
+                            <ol class="stages" id="setup-stages">
+                            <li class="stage todo" data-stage="check">
+                                <div class="node"><svg viewBox="0 0 32 32" aria-hidden="true"><rect class="halo" x="3" y="3" width="26" height="26" rx="4" transform="rotate(45 16 16)"/><rect class="shape" x="7" y="7" width="18" height="18" rx="3" transform="rotate(45 16 16)"/><circle class="pip" cx="16" cy="16" r="4"/><path class="glyph" d="M16 10v7m0 4v.1"/></svg></div>
+                                <div class="stage-name" data-i18n="setup.stageCheck">Check inputs</div>
+                                <div class="stage-sub"></div>
+                            </li>
+                            <li class="stage todo" data-stage="unpack">
+                                <div class="node"><svg viewBox="0 0 32 32" aria-hidden="true"><rect class="halo" x="3" y="3" width="26" height="26" rx="4" transform="rotate(45 16 16)"/><rect class="shape" x="7" y="7" width="18" height="18" rx="3" transform="rotate(45 16 16)"/><circle class="pip" cx="16" cy="16" r="4"/><path class="glyph" d="M16 10v7m0 4v.1"/></svg></div>
+                                <div class="stage-name" data-i18n="setup.stageUnpack">Unpack</div>
+                                <div class="stage-sub"></div>
+                            </li>
+                            <li class="stage todo" data-stage="verify">
+                                <div class="node"><svg viewBox="0 0 32 32" aria-hidden="true"><rect class="halo" x="3" y="3" width="26" height="26" rx="4" transform="rotate(45 16 16)"/><rect class="shape" x="7" y="7" width="18" height="18" rx="3" transform="rotate(45 16 16)"/><circle class="pip" cx="16" cy="16" r="4"/><path class="glyph" d="M16 10v7m0 4v.1"/></svg></div>
+                                <div class="stage-name" data-i18n="setup.stageVerify">Verify</div>
+                                <div class="stage-sub"></div>
+                            </li>
+                            <li class="stage todo" data-stage="settings">
+                                <div class="node"><svg viewBox="0 0 32 32" aria-hidden="true"><rect class="halo" x="3" y="3" width="26" height="26" rx="4" transform="rotate(45 16 16)"/><rect class="shape" x="7" y="7" width="18" height="18" rx="3" transform="rotate(45 16 16)"/><circle class="pip" cx="16" cy="16" r="4"/><path class="glyph" d="M16 10v7m0 4v.1"/></svg></div>
+                                <div class="stage-name" data-i18n="setup.stageSettings">Write settings</div>
+                                <div class="stage-sub"></div>
+                            </li>
+                            <li class="stage todo" data-stage="finish">
+                                <div class="node"><svg viewBox="0 0 32 32" aria-hidden="true"><rect class="halo" x="3" y="3" width="26" height="26" rx="4" transform="rotate(45 16 16)"/><rect class="shape" x="7" y="7" width="18" height="18" rx="3" transform="rotate(45 16 16)"/><circle class="pip" cx="16" cy="16" r="4"/><path class="glyph" d="M16 10v7m0 4v.1"/></svg></div>
+                                <div class="stage-name" data-i18n="setup.stageFinish">Finish</div>
+                                <div class="stage-sub"></div>
+                            </li>
+                            </ol>
+                            <div class="progress stage-progress" id="setup-pending" role="progressbar" aria-busy="true" aria-labelledby="setup-title"><i></i></div>
+                            <div class="alert" id="setup-alert" role="alert" hidden><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-alert"></use></svg><div><h3 id="setup-status"></h3><p data-i18n="setup.stopNote">No game files were unpacked or changed.</p></div></div>
+                            <pre class="log" id="setup-log" hidden></pre>
+                        </div>
+                        <footer class="setup-footer spread" id="setup-failure-actions" hidden>
+                            <button type="button" class="btn btn-ghost" id="copy-setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-copy"></use></svg><span data-i18n="setup.copyDetails">Copy details</span></button>
+                            <div class="actions"><button type="button" class="btn btn-secondary" id="setup-edit"><span data-i18n="setup.backTo">Back to set up</span></button><button type="button" class="btn btn-primary" id="setup-retry"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="setup.tryAgain">Try again</span></button></div>
+                        </footer>
+                    </div>
+                </section>
+
+                <section id="mods-panel" class="page page-section" data-page-parent="show23" hidden>
+                    <header class="page-head">
+                        <nav class="crumb" data-i18n-aria="game.mods" aria-label="Mods"><button id="mods-back" type="button" data-page-back>MLB The Show 23</button><span aria-hidden="true">/</span><span data-i18n="game.mods">Mods</span></nav>
+                        <div>
+                            <h1 class="page-title"><span data-i18n="game.mods">Mods</span> <span id="mods-count" class="mod-count" hidden></span></h1>
+                            <p class="page-lede"><span data-i18n="mods.orderHint">Manage content packs in this install’s data/mods folder.</span> <span data-i18n="mods.orderHelp">Use the arrows to move a pack earlier or later in the saved order.</span></p>
+                        </div>
+                    </header>
+                    <div id="show23-mods-panel" class="mods-view"></div>
+                </section>
+
+                <section id="settings-page" class="page page-section" hidden>
+                    <header class="page-head"><h1 class="page-title" data-i18n="settings.title">Settings</h1></header>
+                    <div class="settings-grid">
+                        <section class="panel">
+                            <h2 class="section-h" data-i18n="settings.updates">Updates</h2>
+                            <div class="spread channel-settings">
+                                <div><strong id="channel-label" data-i18n="updateChannel.label">Update channel</strong><p class="small faint" data-i18n="updateChannel.help">Beta gets test versions early. You can switch back to Stable any time.</p></div>
+                                <div class="seg toggle-group" id="channel" role="radiogroup" aria-labelledby="channel-label">
+                                    <button type="button" class="toggle-btn on" id="channel-stable" role="radio" aria-checked="true" tabindex="0" data-choice="stable"><span data-i18n="updateChannel.stable">Stable</span></button>
+                                    <button type="button" class="toggle-btn" id="channel-beta" role="radio" aria-checked="false" tabindex="-1" data-choice="beta"><i class="dot warn" aria-hidden="true"></i><span data-i18n="updateChannel.beta">Beta</span></button>
+                                </div>
+                            </div>
+                            <table class="parts">
+                                <thead><tr><th scope="col" data-i18n="settings.part">Part</th><th scope="col" data-i18n="settings.installed">Installed</th><th scope="col" data-i18n="settings.status">Status</th></tr></thead>
+                                <tbody id="parts"></tbody>
+                            </table>
+                            <div class="actions settings-actions">
+                                <button type="button" class="btn btn-secondary" id="check-parts" data-autofocus><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="settings.check">Check for updates</span></button>
+                                <button type="button" class="btn btn-ghost" id="switch-stable" hidden><span data-i18n="settings.goStable">Switch back to Stable</span></button>
+                                <time class="small faint checked" id="parts-checked" hidden></time>
+                            </div>
+                            <p class="status-line" id="update-status" role="status" hidden></p>
+                        </section>
+                        <section class="panel">
+                            <h2 class="section-h" data-i18n="settings.general">General</h2>
+                            <div class="set-row set-location">
+                                <div><span class="set-name" id="location-label" data-i18n="settings.mode">Data location</span><span class="set-help" data-i18n="settings.locationHelp">Installed keeps data in AppData. Portable keeps it next to the launcher.</span></div>
+                                <div class="seg toggle-group" id="location" role="radiogroup" aria-labelledby="location-label">
+                                    <button type="button" class="toggle-btn on" id="location-installed" role="radio" aria-checked="true" tabindex="0" data-choice="installed"><span data-i18n="settings.installed">Installed</span></button>
+                                    <button type="button" class="toggle-btn" id="location-portable" role="radio" aria-checked="false" tabindex="-1" data-choice="portable"><span data-i18n="settings.portable">Portable</span></button>
+                                </div>
+                                <button type="button" class="btn btn-ghost" id="switch-mode" disabled><span data-i18n="settings.applyMode">Change location and restart</span></button>
+                            </div>
+                            <div class="set-row">
+                                <div><label for="offline" data-i18n="settings.offline">Offline mode</label><span class="set-help" data-i18n="settings.offlineHelp">Release checks and downloads are disabled after restarting in offline mode.</span></div>
+                                <input class="switch" type="checkbox" id="offline" role="switch">
+                            </div>
+                            <div class="set-row" id="offline-status" hidden><span class="small faint" data-i18n="settings.offlineActive">Offline mode is active.</span><button type="button" class="btn btn-ghost btn-sm" id="restart-online"><span data-i18n="settings.restartOnline">Restart online</span></button></div>
+                            <div class="set-row">
+                                <label for="language" data-i18n="settings.language">Language</label>
+                                <div class="select-wrap"><select id="language"><option value="en">English</option><option value="fr">Français</option><option value="es">Español</option><option value="ru">Русский</option></select><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-chevron"></use></svg></div>
+                            </div>
+                            <p class="status-line" id="settings-status" role="status" hidden></p>
+                        </section>
+                    </div>
+                </section>
+
+                <section id="support-page" class="page page-section" hidden>
+                    <header class="page-head"><h1 class="page-title" data-i18n="support.title">Support</h1></header>
+                    <section class="panel support-panel">
+                        <h2 class="section-h" data-i18n="support.diagnostics">Diagnostics</h2>
+                        <div class="spread support-toolbar">
+                            <p class="muted" data-i18n="support.notice">Review the report before sharing it. The launcher keeps it on this device.</p>
+                            <div class="actions"><button type="button" class="btn btn-ghost" id="open-logs"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-folder"></use></svg><span data-i18n="support.logs">Open logs folder</span></button><button type="button" class="btn btn-secondary" id="refresh-diagnostics"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="support.refresh">Refresh</span></button><button type="button" class="btn btn-primary" id="copy-diagnostics" data-autofocus><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-copy"></use></svg><span data-i18n="support.copy">Copy diagnostics</span></button></div>
+                        </div>
+                        <div id="diagnostics" class="log" tabindex="0" data-i18n-aria="support.diagnostics" aria-label="Diagnostics"></div>
+                    </section>
                 </section>
             </main>
         </div>
     </div>
-    <span id="message-box" inert>
-        <span id="data" class="container card">
-            <span class="title mb-title"></span>
-            <span class="content">
-                <span class="mb-content"></span>
-                <span class="mb-buttons"></span>
-            </span>
-        </span>
-    </span>
     <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+    <div id="message-box" class="scrim" inert>
+        <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="message-box-title" aria-describedby="message-box-content">
+            <h2 class="mb-title" id="message-box-title"></h2>
+            <p class="mb-content" id="message-box-content"></p>
+            <div class="mb-buttons actions"></div>
+        </section>
+    </div>
 </body>
 </html>

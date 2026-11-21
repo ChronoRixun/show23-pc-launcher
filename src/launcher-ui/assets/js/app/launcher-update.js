@@ -31,8 +31,6 @@
         polling: null, // the poll under way (follow())
 
         async init() {
-            const checkButton = el('launcher-update-check');
-            if (checkButton) checkButton.onclick = () => this.check();
             const action = el('launcher-update-action');
             if (action) action.onclick = () => this.act();
             const notes = el('launcher-update-notes');
@@ -105,16 +103,16 @@
             if (!s.canInstall) {
                 const manual = await window.showMessageBox(t('launcherUpdate.confirmTitle'),
                     t('launcherUpdate.confirmManual', { version: s.latest, current: s.current }),
-                    [t('launcherUpdate.download'), { label: t('launcherUpdate.notNow'), cancel: true }]);
-                if (manual === 0) this.openPage();
+                    [{ label: t('launcherUpdate.notNow'), cancel: true }, t('launcherUpdate.download')]);
+                if (manual === 1) this.openPage();
                 return;
             }
 
             const size = s.size ? formatBytes(s.size) : '';
             const choice = await window.showMessageBox(t('launcherUpdate.confirmTitle'),
                 t('launcherUpdate.confirmBody', { version: s.latest, current: s.current, size }),
-                [t('launcherUpdate.update'), { label: t('launcherUpdate.notNow'), cancel: true }]);
-            if (choice !== 0) return;
+                [{ label: t('launcherUpdate.notNow'), cancel: true }, t('launcherUpdate.update')]);
+            if (choice !== 1) return;
             // (Never a switch back: that is asked for in Settings each time.)
             await run('start-launcher-update');
             await this.follow();
@@ -192,6 +190,8 @@
                 bar.hidden = !spec;
                 if (spec) {
                     bar.classList.toggle('is-failed', !!spec.failed);
+                    bar.classList.toggle('is-ready', s.state === 'ready' && !spec.failed);
+                    el('launcher-update-icon').setAttribute('href', '#icon-' + (spec.failed ? 'alert' : s.state === 'ready' ? 'check' : 'download'));
                     el('launcher-update-text').textContent = spec.text;
                     const action = el('launcher-update-action');
                     action.hidden = !spec.action;
@@ -199,38 +199,20 @@
                     action.textContent = spec.action || '';
                     const progress = el('launcher-update-progress');
                     progress.hidden = spec.progress === undefined;
+                    progress.setAttribute('aria-valuenow', String(spec.progress || 0));
                     el('launcher-update-fill').style.width = `${spec.progress || 0}%`;
                     el('launcher-update-notes').hidden = !(s && s.latest);
                     el('launcher-update-dismiss').hidden = !spec.dismiss;
                 }
             }
 
-            const line = el('part-status-launcher');
-            if (line) line.textContent = this.statusLine(s);
             const switchBack = el('switch-stable');
             if (switchBack) {
                 switchBack.hidden = !s?.enabled || !s.aheadOfStable || !s.canInstall ||
                     !!window.IS_OFFLINE || s.channel !== 'stable' ||
                     ['checking', 'downloading', 'ready'].includes(s.state);
             }
-            // The version line: a Beta badge on a pre-release, and the update channel.
-            const badge = el('launcher-version-badge');
-            if (badge) {
-                badge.hidden = !(s && s.prerelease);
-                badge.textContent = t('updateChannel.badge');
-            }
-            const channel = el('launcher-update-channel');
-            if (channel) {
-                channel.textContent = s && s.enabled
-                    ? t('updateChannel.footer', { channel: t(s.channel === 'beta' ? 'updateChannel.beta' : 'updateChannel.stable') })
-                    : '';
-            }
-            const checkButton = el('launcher-update-check');
-            if (checkButton) {
-                checkButton.hidden = !s || !s.enabled;
-                checkButton.disabled = !!window.IS_OFFLINE || !s ||
-                    ['checking', 'downloading', 'ready'].includes(s.state);
-            }
+            window.paintLauncherSummary?.();
         }
     };
 

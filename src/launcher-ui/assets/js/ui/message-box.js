@@ -28,13 +28,17 @@ function constructMessageBox(title, message, buttons) {
 
             // The button Escape (a pad's B) presses: the one marked cancel, else the first.
             const specs = buttons.map(value => typeof value === 'string' ? { label: value } : value);
+            const destructive = specs.some(spec => spec.danger);
             const marked = specs.findIndex(spec => spec.cancel);
             const escapeIndex = marked >= 0 ? marked : 0;
 
             specs.forEach((spec, index) => {
-                var button = document.createElement("button");
+                const button = document.createElement("button");
+                button.type = 'button';
+                button.className = spec.danger ? 'btn btn-danger' : spec.cancel ? 'btn btn-secondary' : 'btn btn-primary';
                 button.textContent = spec.label;
                 if (spec.danger) button.classList.add('is-danger');
+                if (spec.cancel && destructive) button.setAttribute("data-autofocus", "");
                 if (index === escapeIndex) button.setAttribute('data-escape', '');
                 button.addEventListener('click', resolveInternal.bind(this, index));
                 buttonElement.appendChild(button);

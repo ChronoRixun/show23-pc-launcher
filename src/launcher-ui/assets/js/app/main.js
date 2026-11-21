@@ -5,7 +5,20 @@
     const run = (command, data) => window.executeCommand(command, data);
     const t = (key, values) => window.LauncherI18n.t(key, values);
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const state = { settings: {}, game: {}, sourceKind: '', checking: false };
+    const partNames = ['launcher', 'emulator', 'server', 'profile'];
+    const pages = { show23: 'show23-page', setup: 'setup', mods: 'mods-panel', settings: 'settings-page', support: 'support-page' };
+    const state = {
+        page: 'show23', settings: {}, game: {}, parts: {}, mods: null,
+        sourceKind: 'package', setupBusy: false, location: 'installed',
+        checking: false, savingChannel: false, maximized: false, diagnostics: ''
+    };
+
+    function make(tag, classes, text) {
+        const el = document.createElement(tag);
+        if (classes) el.className = classes;
+        if (text) el.textContent = text;
+        return el;
+    }
 
     function status(id, text) {
         $(id).textContent = text || '';
@@ -23,50 +36,171 @@
         });
     }
 
-    function showPage(page) {
+    function showPage(page, focusId) {
+        const nav = page === 'setup' || page === 'mods' ? 'show23' : page;
+        state.page = page;
+        for (const [name, id] of Object.entries(pages)) $(id).hidden = name !== page;
+        // Keep sub-view visibility explicit so navigation and tests can track the hero.
+        $('home-hero').hidden = page !== 'show23';
         for (const button of document.querySelectorAll('[data-page]')) {
-            const active = button.dataset.page === page;
-            $(button.dataset.page + '-page').hidden = !active;
+            const active = button.dataset.page === nav;
             button.classList.toggle('active', active);
             if (active) button.setAttribute('aria-current', 'page');
             else button.removeAttribute('aria-current');
         }
+        $('content').scrollTop = 0;
+        if (focusId) $(focusId).focus();
+    }
+
+    function setRadio(id, choice) {
+        for (const button of $(id).querySelectorAll('[data-choice]')) {
+            const selected = button.dataset.choice === choice;
+            button.classList.toggle('on', selected);
+            button.setAttribute('aria-checked', String(selected));
+            button.setAttribute('tabindex', selected ? '0' : '-1');
+        }
+    }
+
+    function channelText() {
+        return t(state.settings.channel === 'beta' ? 'updateChannel.betaFooter' : 'updateChannel.stableFooter');
+    }
+
+    function paintHome() {
+        const game = state.game;
+        const ready = !!game.ready;
+        $('game-state').textContent = t(ready ? 'game.ready' : 'game.notReady');
+        $('game-pill').className = ready ? 'pill ok' : 'pill warn';
+        $('game-state-dot').className = ready ? 'dot ok' : 'dot warn';
+        $('home-hero').classList.toggle('is-unset', !ready);
+        $('play').disabled = !ready;
+        $('play').classList.toggle('btn-primary', ready);
+        $('play').classList.toggle('btn-secondary', !ready);
+        if (ready) $('play').setAttribute('data-autofocus', '');
+        else $('play').removeAttribute('data-autofocus');
+        $('setup-open').hidden = ready;
+        $('home-before').hidden = ready;
+        $('home-ready').hidden = !ready;
+        $('scorebug').hidden = !ready;
+
+        const meta = $('game-meta');
+        meta.textContent = '';
+        if (!ready) {
+            meta.textContent = t('game.intro');
+            return;
+        }
+        const fields = [make('span', '', t('game.versionLine', { version: game.version || t('game.unknown') }))];
+        if (game.folder) fields.push(make('span', 'mono', game.folder));
+        if (state.mods) {
+            fields.push(make('span', '', t('game.modsOn', { enabled: state.mods.enabled, total: state.mods.total })));
+        }
+        fields.forEach((field, index) => {
+            if (index) {
+                const separator = make('i', 'sep');
+                separator.setAttribute('aria-hidden', 'true');
+                meta.appendChild(separator);
+            }
+            meta.appendChild(field);
+        });
+        $('scorebug-game').textContent = game.version || t('game.unknown');
+        $('scorebug-source').textContent = game.updated ? t('game.baseAndUpdate') : t('game.baseOnly');
     }
 
     async function gameState() {
         state.game = await run('get-show23') || {};
-        $('game-state').textContent = t(state.game.ready ? 'game.ready' : 'game.notReady');
-        $('play').disabled = !state.game.ready;
+        state.mods = null;
+        paintHome();
+        if (state.game.ready) {
+            const folder = state.game.folder;
+            const result = await run('get-mods', { game: 'show23' });
+            if (state.game.folder === folder && result?.installed) {
+                const mods = result.mods || [];
+                state.mods = { enabled: mods.filter(mod => mod.enabled).length, total: mods.length };
+                paintHome();
+            }
+        }
     }
 
     function setupInputsChanged() {
-        $('setup-continue').disabled = !state.sourceKind || !$('base-path').value || !$('install-path').value;
+        const base = $('base-path').value;
+        $('setup-continue').disabled = state.setupBusy || !base || !$('install-path').value;
         $('update-clear').disabled = !$('update-path').value;
-        status('setup-status', '');
+        const packageMode = state.sourceKind === 'package';
+        $('base-choose').textContent = t(packageMode ? 'setup.package' : 'setup.folder');
+        status('base-hint', base ? t(packageMode ? 'setup.packageSelected' : 'setup.folderSelected',
+            { name: base.split(/[\\/]/).filter(Boolean).pop() }) : '');
     }
 
-    function closeSetup() {
-        $('setup').hidden = true;
+    function showPicker(focusId) {
+        $('setup-picker').hidden = false;
+        $('setup-progress').hidden = true;
+        $('setup-title').textContent = t('setup.title');
+        $('setup-lede').textContent = t('setup.intro');
+        setupInputsChanged();
+        if (focusId) $(focusId).focus();
+    }
+
+    function openSetup() {
+        if (state.setupBusy) return;
+        state.sourceKind = 'package';
         $('base-path').value = '';
         $('update-path').value = '';
-        state.sourceKind = '';
-        setupInputsChanged();
-        $('setup-open').focus();
+        $('install-path').value = state.game.folder || '';
+        setRadio('base-kind', state.sourceKind);
+        showPage('setup');
+        showPicker('base-package');
     }
 
-    async function pickPackage() {
-        return run('browse-file', {
-            title: t('setup.package'),
-            filters: [{ name: 'Package (*.pkg)', pattern: '*.pkg' }]
-        });
+    async function pickPackage(title) {
+        return run('browse-file', { title: t(title), filters: [{ name: t('setup.packageFilter'), pattern: '*.pkg' }] });
     }
 
-    async function browseBase(kind) {
-        const path = kind === 'package' ? await pickPackage() : await run('browse-folder');
-        if (!path) return;
-        state.sourceKind = kind;
-        $('base-path').value = path;
-        setupInputsChanged();
+    function showStage(reply) {
+        const stopped = reply !== null;
+        $('setup-picker').hidden = true;
+        $('setup-progress').hidden = false;
+        $('setup-title').textContent = t(stopped ? 'setup.stopped' : 'setup.settingUp');
+        $('setup-lede').textContent = '';
+        const activeStage = reply?.stage || 'check';
+        for (const node of $('setup-stages').querySelectorAll('[data-stage]')) {
+            const active = node.dataset.stage === activeStage;
+            node.className = 'stage ' + (active ? (stopped ? 'failed' : 'current') : 'todo');
+            node.querySelector('.stage-sub').textContent = t(active
+                ? (stopped ? 'setup.failed' : 'setup.checkingInputs')
+                : (stopped ? 'setup.notStarted' : 'setup.waiting'));
+        }
+        $('setup-pending').hidden = stopped;
+        if (typeof reply?.percent === 'number') {
+            $('setup-pending').setAttribute('aria-valuenow', String(reply.percent));
+        } else {
+            $('setup-pending').removeAttribute('aria-valuenow');
+        }
+        $('setup-alert').hidden = !stopped;
+        $('setup-failure-actions').hidden = !stopped;
+        const message = reply?.pending ? t('game.setupPending') : reply?.message;
+        $('setup-status').textContent = message || '';
+        const lines = reply?.pending ? [message] : (reply?.log || (message ? [message] : []));
+        status('setup-log', lines.slice(-4).join('\n'));
+        if (stopped && state.page === 'setup') $('setup-retry').focus();
+    }
+
+    async function submitSetup() {
+        if (state.setupBusy || !$('base-path').value || !$('install-path').value) return;
+        state.setupBusy = true;
+        try {
+            showStage(null);
+            const reply = await run('setup-show23', {
+                kind: state.sourceKind, base: $('base-path').value,
+                update: $('update-path').value, install: $('install-path').value
+            });
+            showStage(reply?.message || reply?.pending ? reply : { message: t('support.error') });
+            await gameState();
+        } catch (error) {
+            console.error(error);
+            showStage({ message: t('support.error') });
+        } finally {
+            state.setupBusy = false;
+            setupInputsChanged();
+        }
     }
 
     async function verify() {
@@ -78,31 +212,29 @@
                 const result = await run('get-verify') || {};
                 if (!result.busy) {
                     status('game-status', result.message || t('support.error'));
-                    return;
+                    break;
                 }
                 await sleep(500);
             }
-            status('game-status', t('game.verifying'));
         } finally {
             $('verify').disabled = false;
         }
     }
 
-    function drawSettings() {
+    function paintSettings() {
         const saved = state.settings;
         window.IS_OFFLINE = !!saved.offline;
         window.LauncherI18n.setLanguage(saved.language || 'en');
         window.LauncherI18n.applyStaticTranslations();
-        if (['dark', 'navy-gradient'].includes(saved.theme)) document.documentElement.dataset.theme = saved.theme;
-        else delete document.documentElement.dataset.theme;
         $('language').value = window.LauncherI18n.getLanguage();
-        $('theme').value = saved.theme || 'default';
-        $('channel').value = saved.channel || 'stable';
+        setRadio('channel', saved.channel || 'stable');
+        setRadio('location', state.location);
+        $('switch-mode').disabled = (state.location === 'portable') === !!saved.portable;
         $('offline').checked = !!saved.offlineSaved;
         $('offline-status').hidden = !saved.offline;
-        $('data-mode').textContent = t(saved.portable ? 'settings.portable' : 'settings.installed');
         $('check-parts').disabled = !!saved.offline || state.checking;
-        window.LauncherDropdowns?.enhance(document.getElementById("settings-page"));
+        window.__setMaximized(state.maximized);
+        paintHome();
         window.LauncherUpdate.render();
     }
 
@@ -110,37 +242,100 @@
         const ok = await run('save-setting', { key, value });
         status('settings-status', ok ? '' : t('settings.saveError'));
         state.settings = await run('get-settings') || {};
-        drawSettings();
+        paintSettings();
         return ok;
     }
 
-    async function renderParts() {
-        const installed = await run('get-parts') || {};
-        $('parts').textContent = '';
-        for (const item of installed.parts || []) {
-            const row = document.createElement('div');
-            row.className = 'part-row';
-            const name = document.createElement('dt');
-            name.textContent = t('settings.' + item.part);
-            const data = document.createElement('dd');
-            data.textContent = item.version || t('settings.noVersion');
-            if (item.prerelease) {
-                const badge = document.createElement('span');
-                badge.className = 'part-badge';
-                badge.textContent = t('updateChannel.badge');
-                data.appendChild(badge);
-            }
-            const line = document.createElement('span');
-            line.className = 'part-status';
-            line.id = 'part-status-' + item.part;
-            line.textContent = item.status || '';
-            data.appendChild(line);
-            row.appendChild(name);
-            row.appendChild(data);
-            $('parts').appendChild(row);
+    function getPartStatus(item) {
+        const launcher = window.LauncherUpdate.status;
+        if (window.IS_OFFLINE) return { text: t('launcherUpdate.offline'), tone: '' };
+        const own = item.part === 'launcher';
+        const info = own ? launcher : item;
+        const noRelease = /^(No release has been published|No release with all its files has been published)/i;
+        if (info?.state === 'unpublished' || noRelease.test(info?.error || info?.status || '')) {
+            return { tone: '', text: t('settings.noRelease') };
         }
-        window.LauncherUpdate.render();
-        return installed.busy;
+        switch (info?.state) {
+            case 'available':
+                return { tone: 'accent', text: t('settings.available', { version: own ? launcher.latest : item.availableVersion }) };
+            case 'up-to-date':
+                if (!info.fromCache && !info.aheadOfStable && item.version) return { tone: 'ok', text: t('settings.upToDate') };
+                break;
+            case 'checking':
+                return { tone: 'accent', text: t('settings.checking') };
+        }
+        const text = own ? window.LauncherUpdate.statusLine(launcher) : item.status;
+        return { text: text || t('settings.notChecked'), tone: '' };
+    }
+
+    function paintPartStatus(target, item) {
+        const spec = getPartStatus(item);
+        target.textContent = '';
+        const dot = make('i', 'dot ' + spec.tone);
+        dot.setAttribute('aria-hidden', 'true');
+        target.appendChild(dot);
+        target.appendChild(make('span', 'status-text', spec.text));
+    }
+
+    function currentPart(name) {
+        return (state.parts.parts || []).find(part => part.part === name) || { part: name };
+    }
+
+    function paintVersions() {
+        $('parts').textContent = '';
+        for (const name of partNames) {
+            const item = currentPart(name);
+            const title = t('settings.' + name);
+            const version = item.version || t('settings.noVersion');
+            const row = make('tr');
+            row.dataset.part = name;
+            row.appendChild(make('td', 'strong', title));
+            const versionCell = make('td', 'v', version);
+            if (item.prerelease) versionCell.appendChild(make('span', 'tag', t('updateChannel.badge')));
+            row.appendChild(versionCell);
+            const statusCell = make('td');
+            const line = make('span', 'part-status');
+            line.id = 'part-status-' + name;
+            statusCell.appendChild(line);
+            row.appendChild(statusCell);
+            $('parts').appendChild(row);
+
+            const scoreCell = $('scorebug').querySelector('[data-part="' + name + '"]');
+            scoreCell.textContent = '';
+            scoreCell.appendChild(make('div', 'sb-label', title));
+            const value = make('div', 'sb-val' + (item.version ? '' : ' muted'));
+            value.appendChild(make('span', 'part-version', version));
+            if (item.prerelease) value.appendChild(make('span', 'tag', t('updateChannel.badge')));
+            scoreCell.appendChild(value);
+            scoreCell.appendChild(make('div', 'sb-sub part-status'));
+        }
+        paintUpdateSummary();
+    }
+
+    function paintUpdateSummary() {
+        const channel = channelText();
+        $('footer-channel').textContent = channel;
+        $('footer-channel-dot').className = state.settings.channel === 'beta' ? 'dot warn' : 'dot ok';
+        $('footer-version').textContent = t('nav.launcherVersion', { version: currentPart('launcher').version || t('game.unknown') });
+        for (const name of partNames) {
+            const item = currentPart(name);
+            const line = $('part-status-' + name);
+            const cell = $('scorebug').querySelector('[data-part="' + name + '"]').querySelector('.part-status');
+            if (line) paintPartStatus(line, item);
+            if (cell) paintPartStatus(cell, item);
+        }
+        const stamp = Math.max(state.parts.checkedAt || 0, window.LauncherUpdate.status?.checkedAt || 0);
+        const checked = stamp ? t('settings.checked', {
+            time: new Intl.DateTimeFormat(window.LauncherI18n.getLanguage(), { hour: '2-digit', minute: '2-digit' }).format(stamp)
+        }) : '';
+        status('parts-checked', checked);
+        $('scorebug-checked').textContent = checked ? channel + ' · ' + checked : channel;
+    }
+
+    async function refreshParts() {
+        state.parts = await run('get-parts') || {};
+        paintVersions();
+        return state.parts.busy;
     }
 
     async function followUpdates() {
@@ -150,7 +345,7 @@
         const refresh = window.LauncherUpdate.follow();
         try {
             for (let attempt = 0; attempt < 95; attempt++) {
-                if (!await renderParts()) break;
+                if (!await refreshParts()) break;
                 await sleep(500);
             }
             await refresh;
@@ -158,7 +353,7 @@
             state.checking = false;
             $('check-parts').disabled = !!state.settings.offline;
             status('update-status', '');
-            await renderParts();
+            await refreshParts();
         }
     }
 
@@ -167,9 +362,9 @@
         if (!saved?.aheadOfStable || !saved.canInstall || saved.channel !== 'stable') return;
         const choice = await window.showMessageBox(
             t('settings.goStable'), t('settings.confirmDowngrade', { current: saved.current, target: saved.latest }),
-            [t('settings.goStable'), { label: t('settings.keepBeta'), cancel: true }]
+            [{ label: t('settings.keepBeta'), cancel: true }, t('settings.goStable')]
         );
-        if (choice !== 0) {
+        if (choice !== 1) {
             await run('keep-beta');
             return;
         }
@@ -182,37 +377,62 @@
 
     async function diagnostics() {
         const result = await run('get-support-diagnostics');
-        $('diagnostics').textContent = result?.text || '';
+        state.diagnostics = result?.text || '';
+        const log = $('diagnostics');
+        log.textContent = '';
+        state.diagnostics.trimEnd().split('\n').forEach((line, index) => {
+            const divider = line.indexOf(': ');
+            if (index === 0) log.appendChild(make('span', 'log-title', line));
+            else if (divider === -1) log.appendChild(make('span', 'log-row', line));
+            else {
+                const row = make('span', 'log-row');
+                row.appendChild(make('span', 'k', line.slice(0, divider + 1)));
+                row.appendChild(make('span', '', ' ' + line.slice(divider + 2)));
+                log.appendChild(row);
+            }
+        });
     }
 
-    function wireControls() {
-        for (const button of document.querySelectorAll('[data-page]')) {
-            bind(button.id, 'click', async () => {
-                showPage(button.dataset.page);
-                if (button.dataset.page === 'settings') {
-                    await window.LauncherUpdate.refresh();
-                    await renderParts();
-                }
-                if (button.dataset.page === 'support') await diagnostics();
-                if (button.dataset.page === 'show23') await gameState();
+    async function openSettings() {
+        showPage('settings');
+        await window.LauncherUpdate.refresh();
+        await refreshParts();
+    }
+
+    async function returnHome(button) {
+        showPage('show23', button);
+        await gameState();
+    }
+
+    async function copy(text, okKey) {
+        const answer = await run('copy-to-clipboard', { text });
+        window.showToast(t(answer?.success ? okKey : 'support.copyFailed'), answer?.success ? 'success' : 'error');
+    }
+
+    function wireSetup() {
+        bind('setup-open', 'click', openSetup);
+        bind('setup-back', 'click', () => returnHome('setup-open'));
+        bind('setup-cancel', 'click', () => returnHome('setup-open'));
+        bind('setup-edit', 'click', () => showPicker('base-choose'));
+        bind('setup-retry', 'click', submitSetup);
+        bind('setup-continue', 'click', submitSetup);
+        bind('copy-setup', 'click', () => copy($('setup-log').textContent, 'setup.detailsCopied'));
+
+        for (const kind of ['package', 'folder']) {
+            bind('base-' + kind, 'click', () => {
+                if (state.sourceKind !== kind) $('base-path').value = '';
+                state.sourceKind = kind;
+                setRadio('base-kind', kind);
+                setupInputsChanged();
             });
         }
-
-        bind('minimize-button', 'click', () => run('minimize'));
-        bind('maximize-button', 'click', () => run('toggle-maximize'));
-        bind('close-button', 'click', () => run('close'));
-        window.__setMaximized = value => $('maximize-button').classList.toggle('is-maximized', value);
-
-        bind('setup-open', 'click', () => {
-            $('setup').hidden = false;
-            $('install-path').value = state.game.folder || '';
+        bind('base-choose', 'click', async () => {
+            const path = state.sourceKind === 'package' ? await pickPackage('setup.package') : await run('browse-folder');
+            if (path) $('base-path').value = path;
             setupInputsChanged();
-            $('base-package').focus();
         });
-        bind('base-package', 'click', () => browseBase('package'));
-        bind('base-folder', 'click', () => browseBase('folder'));
         bind('update-package', 'click', async () => {
-            const path = await pickPackage();
+            const path = await pickPackage('setup.pickUpdate');
             if (path) $('update-path').value = path;
             setupInputsChanged();
         });
@@ -225,46 +445,34 @@
             if (path) $('install-path').value = path;
             setupInputsChanged();
         });
-        bind('setup-cancel', 'click', closeSetup);
-        bind('setup-continue', 'click', async () => {
-            $('setup-continue').disabled = true;
-            try {
-                const reply = await run('setup-show23', {
-                    kind: state.sourceKind,
-                    base: $('base-path').value,
-                    update: $('update-path').value,
-                    install: $('install-path').value
-                });
-                status('setup-status', reply?.pending ? t('game.setupPending') : (reply?.message || t('support.error')));
-                await gameState();
-                if (!$('mods-panel').hidden) window.ModsView.render('show23');
-            } finally {
-                $('setup-continue').disabled = false;
-            }
-        });
-        bind('play', 'click', async () => {
-            const result = await run('play-show23');
-            status('game-status', result?.message);
-        });
-        bind('verify', 'click', verify);
-        bind('mods', 'click', () => {
-            const open = $('mods-panel').hidden;
-            $('mods-panel').hidden = !open;
-            $('mods').setAttribute('aria-expanded', String(open));
-            if (open) window.ModsView.render('show23');
-        });
+    }
 
-        for (const key of ['language', 'theme', 'channel']) {
-            bind(key, 'change', async () => {
-                await save(key, $(key).value);
-                if (key === 'language') {
-                    await gameState();
-                    if (!$('mods-panel').hidden) window.ModsView.render('show23');
+    function wireSettings() {
+        for (const channel of ['stable', 'beta']) {
+            bind('channel-' + channel, 'click', async () => {
+                if (state.savingChannel || channel === state.settings.channel) return;
+                state.savingChannel = true;
+                try {
+                    if (await save('channel', channel)) {
+                        // The backend invalidates the old selection and begins the new launcher check.
+                        await followUpdates();
+                    }
+                } finally {
+                    state.savingChannel = false;
                 }
-                if (key === 'channel') await followUpdates();
-                else await renderParts();
             });
         }
+        for (const location of ['installed', 'portable']) {
+            bind('location-' + location, 'click', () => {
+                state.location = location;
+                setRadio('location', location);
+                $('switch-mode').disabled = (location === 'portable') === !!state.settings.portable;
+            });
+        }
+        bind('language', 'change', async () => {
+            await save('language', $('language').value);
+            paintVersions();
+        });
         bind('check-parts', 'click', async () => {
             if (!await run('check-parts')) return;
             status('update-status', t('settings.checking'));
@@ -276,30 +484,63 @@
             if (!await save('offline', String(enable)) || enable === !!state.settings.offline) return;
             if (enable) {
                 const choice = await window.showMessageBox(t('settings.offline'), t('settings.restartOfflineBody'),
-                    [t('settings.restart'), { label: t('common.cancel'), cancel: true }]);
-                if (choice === 0) await run('relaunch');
+                    [{ label: t('common.cancel'), cancel: true }, t('settings.restart')]);
+                if (choice === 1) await run('relaunch');
             }
         });
         bind('restart-online', 'click', () => run('relaunch-online'));
         bind('switch-mode', 'click', async () => {
-            const answer = await run('switch-portable', { portable: !state.settings.portable });
+            const answer = await run('switch-portable', { portable: state.location === 'portable' });
             if (!answer?.success) status('settings-status', t('settings.saveError'));
         });
+    }
+
+    function wireControls() {
+        bind('show23', 'click', () => returnHome());
+        bind('settings', 'click', openSettings);
+        bind('manage-updates', 'click', async () => {
+            await openSettings();
+            $('channel-' + (state.settings.channel || 'stable')).focus();
+        });
+        bind('support', 'click', async () => {
+            showPage('support');
+            await diagnostics();
+        });
+        bind('minimize-button', 'click', () => run('minimize'));
+        bind('maximize-button', 'click', () => run('toggle-maximize'));
+        bind('close-button', 'click', () => run('close'));
+        window.__setMaximized = value => {
+            state.maximized = !!value;
+            const button = $('maximize-button');
+            button.classList.toggle('is-maximized', state.maximized);
+            button.setAttribute('aria-label', t(state.maximized ? 'window.restore' : 'window.maximize'));
+        };
+
+        bind('play', 'click', async () => {
+            const result = await run('play-show23');
+            status('game-status', result?.message);
+        });
+        bind('verify', 'click', verify);
+        bind('mods', 'click', () => {
+            showPage('mods', 'mods-back');
+            window.ModsView.render('show23');
+        });
+        bind('mods-back', 'click', () => returnHome('mods'));
         bind('refresh-diagnostics', 'click', diagnostics);
         bind('open-logs', 'click', () => run('open-logs'));
-        bind('copy-diagnostics', 'click', async () => {
-            const answer = await run('copy-to-clipboard', { text: $('diagnostics').textContent });
-            status('support-status', t(answer?.success ? 'support.copied' : 'support.copyFailed'));
-        });
+        bind('copy-diagnostics', 'click', () => copy(state.diagnostics, 'support.copied'));
+        wireSetup();
+        wireSettings();
     }
 
     async function init() {
         wireControls();
+        window.paintLauncherSummary = paintUpdateSummary;
         try {
             state.settings = await run('get-settings') || {};
-            drawSettings();
-            await gameState();
-            await window.LauncherUpdate.init();
+            state.location = state.settings.portable ? 'portable' : 'installed';
+            paintSettings();
+            await Promise.all([gameState(), refreshParts(), window.LauncherUpdate.init()]);
         } catch (error) {
             console.error(error);
             status('game-status', t('support.error'));
