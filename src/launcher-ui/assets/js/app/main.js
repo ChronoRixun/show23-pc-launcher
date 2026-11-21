@@ -27,9 +27,9 @@
     }
 
     function bind(id, event, callback) {
-        $(id).addEventListener(event, async () => {
+        $(id).addEventListener(event, async e => {
             try {
-                await callback();
+                await callback(e);
             } catch (error) {
                 console.error(error);
                 window.showToast(t('support.error'), 'error');

@@ -10,5 +10,8 @@ Extract the entire zip and run show23-pc.exe. Select Set up, choose your game, a
 
 Online card mode uses a local server on your PC and never contacts the publisher. Play starts the 1.00 base game in local mode, even when you set up the optional 1.21 update. Version 1.21 is offline-only and this release has no offline launch button.
 
+Cards
+The card mode builds its cards from your game's own roster files. A new player starts with a full squad of Common cards and 5,000 Stubs; everything else comes from packs, exchanges and programs. Card pictures are the game's own player photos where the game has one; the designed card art of the original online service is not part of the game files, so cards show a player photo or a silhouette instead.
+
 Credits: see the Credits section in the launcher repository README.
 Licences and source: see LICENSES/. Emulator source: @EMULATOR_SOURCE@
