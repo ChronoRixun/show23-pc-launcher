@@ -6,6 +6,7 @@
 #include "cef/cef_ui.hpp"
 #include "show23/setup_run.hpp"
 #include "show23/play_session.hpp"
+#include "show23/player_name.hpp"
 #include "show23/unpacker.hpp"
 #include "updater/launcher_update.hpp"
 #include "updater/part_store.hpp"
@@ -58,6 +59,7 @@ namespace commands
         std::atomic<show23::play_phase> play_status{show23::play_phase::idle};
         std::atomic_bool play_stop{};
         show23::play_result last_play;
+        const char* player_name_warning{};
         std::jthread play_worker;
 
         bool runtime_worker_busy{};
@@ -223,10 +225,17 @@ namespace commands
 
         void register_settings(cef::cef_ui& ui)
         {
+            ui.add_command("suggest-player-name", [](const auto&, rapidjson::Document& response)
+            {
+                response.CopyFrom(json(show23::windows_player_name(), response.GetAllocator()), response.GetAllocator());
+            });
+
             ui.add_command("get-settings", [](const auto&, rapidjson::Document& response)
             {
                 response.SetObject();
                 auto& a = response.GetAllocator();
+                const auto name = show23::normalize_player_name(utils::properties::load(property_keys::PLAYER_NAME).value_or(""));
+                response.AddMember("playerName", json(name.value_or(""), a), a);
                 response.AddMember("fullscreen", utils::properties::load(property_keys::FULLSCREEN) == "true", a);
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
@@ -245,6 +254,13 @@ namespace commands
                 const auto value = string(request, "value");
                 if (key == "language" && (value == "en" || value == "fr" || value == "es" || value == "ru"))
                     utils::properties::store(property_keys::LANGUAGE, value);
+                else if (key == "playerName")
+                {
+                    const auto name = show23::normalize_player_name(value);
+                    if (name) utils::properties::store(property_keys::PLAYER_NAME, *name);
+                    response.SetBool(name && utils::properties::load(property_keys::PLAYER_NAME) == name);
+                    return;
+                }
                 else if (key == "fullscreen" && (value == "true" || value == "false"))
                     utils::properties::store(property_keys::FULLSCREEN, value);
                 else if (key == "offline" && (value == "true" || value == "false"))
@@ -470,7 +486,7 @@ namespace commands
                 response.SetBool(!setup_busy && !verify.busy && !runtime_worker_busy && !play_active() && install && show23::remove_game_copy(*install));
             });
 
-            ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)
+            ui.add_command("play-show23", [](const auto& value, rapidjson::Document& response)
             {
                 using enum show23::play_phase;
                 std::lock_guard lock(verify.mutex);
@@ -481,10 +497,13 @@ namespace commands
                 }
                 play_stop = false;
                 last_play = {};
+                player_name_warning = nullptr;
+                const auto name = show23::normalize_player_name(string(value, "playerName")).value_or(
+                    show23::normalize_player_name(utils::properties::load(property_keys::PLAYER_NAME).value_or("")).value_or(""));
                 play_status = checking;
                 try
                 {
-                    play_worker = std::jthread([]
+                    play_worker = std::jthread([name]
                     {
                         show23::play_result outcome{"paths"};
                         bool verified{};
@@ -504,12 +523,17 @@ namespace commands
                                     const auto emulator_folder = parts::component_folder(runtime, parts::id::emulator);
                                     const show23::play_request request{*install, game.record->base.path,
                                         server_folder / "python/python.exe", server_folder / "olserver.py",
-                                        emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true"};
+                                        emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true", name};
                                     show23::play_options options;
                                     options.stop = [] { return play_stop.load(); };
                                     options.phase = [](auto phase)
                                     {
                                         if (!play_stop.load()) play_status = phase;
+                                    };
+                                    options.warning = [](const char* warning)
+                                    {
+                                        std::lock_guard lock(verify.mutex);
+                                        player_name_warning = warning;
                                     };
                                     outcome = show23::run_play(request, options);
                                 }
@@ -537,6 +561,7 @@ namespace commands
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("phase", rapidjson::StringRef(show23::phase_name(play_status.load())), a);
+                if (player_name_warning) response.AddMember("nameWarning", rapidjson::StringRef(player_name_warning), a);
                 if (last_play.message) response.AddMember("result", rapidjson::StringRef(last_play.message), a);
                 response.AddMember("code", last_play.number, a);
                 response.AddMember("log", json(last_play.log, a), a);

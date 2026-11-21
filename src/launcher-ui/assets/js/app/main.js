@@ -9,7 +9,7 @@
     const pages = { show23: 'show23-page', setup: 'setup', mods: 'mods-panel', settings: 'settings-page', support: 'support-page' };
     const state = {
         page: 'show23', settings: {}, game: {}, parts: {}, mods: null,
-        play: {}, followingPlay: false, followingRuntime: false, confirmingClose: false,
+        play: {}, followingPlay: false, startingPlay: false, followingRuntime: false, confirmingClose: false,
         sourceKind: 'folder', setupBusy: false, setupDetails: '', location: 'installed',
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
@@ -81,7 +81,7 @@
             game.checkingRuntime ? t('play.runtimeChecking') :
             setUp && !ready ? t('inPlace.runtimeMissing') : game.updated ? t('play.baseOnly') : '';
         status('game-source-notice', sourceMessage);
-        $('play').disabled = !ready || active;
+        $('play').disabled = !ready || active || state.startingPlay;
         $('play').hidden = active;
         $('stop-play').hidden = !active;
         $('stop-play').disabled = phase === 'stopping';
@@ -436,6 +436,7 @@
         $('switch-mode').disabled = (state.location === 'portable') === !!saved.portable;
         $('offline').checked = !!saved.offlineSaved;
         $('fullscreen').checked = !!saved.fullscreen;
+        $('player-name').value = saved.playerName || '';
         $('offline-status').hidden = !saved.offline;
         $('check-parts').disabled = !!saved.offline || state.checking;
         window.__setMaximized(state.maximized);
@@ -680,6 +681,51 @@
         });
     }
 
+    function validatedName(input, feedback) {
+        const name = input.value.replace(/^ +| +$/g, '');
+        const valid = name.length >= 3 && name.length <= 16 && !/[^A-Za-z0-9 _-]/.test(name);
+        status(feedback, valid ? '' : t('playerName.rules'));
+        if (!valid) input.focus();
+        return valid ? name : '';
+    }
+
+    async function persistPlayerName(name) {
+        try {
+            if (await run('save-setting', { key: 'playerName', value: name })) {
+                state.settings.playerName = name;
+                $('player-name').value = name;
+                return true;
+            }
+        } catch (error) {
+            console.error(error);
+        }
+        return false;
+    }
+
+    async function promptForPlayerName() {
+        let suggestion;
+        try { suggestion = await run('suggest-player-name'); }
+        catch (error) { console.error(error); }
+        suggestion = suggestion || 'Player';
+        const dialog = $('player-name-dialog');
+        const input = $('first-player-name');
+        input.value = suggestion;
+        status('first-player-name-error', '');
+        dialog.hidden = false;
+        dialog.removeAttribute('inert');
+        input.focus();
+        return new Promise(resolve => {
+            state.finishNamePrompt = useSuggestion => {
+                const name = useSuggestion ? suggestion : validatedName(input, 'first-player-name-error');
+                if (!name) return;
+                state.finishNamePrompt = null;
+                dialog.hidden = true;
+                dialog.setAttribute('inert', '');
+                resolve(name);
+            };
+        });
+    }
+
     function wireSettings() {
         for (const channel of ['stable', 'beta']) {
             bind('channel-' + channel, 'click', async () => {
@@ -712,6 +758,15 @@
             await followUpdates();
         });
         bind('switch-stable', 'click', stable);
+        bind('save-player-name', 'click', async () => {
+            const name = validatedName($('player-name'), 'player-name-status');
+            if (!name) return;
+            $('save-player-name').disabled = true;
+            try {
+                const saved = await persistPlayerName(name);
+                status('player-name-status', t(saved ? 'playerName.saved' : 'settings.saveError'));
+            } finally { $('save-player-name').disabled = false; }
+        });
         bind('fullscreen', 'change', () => save('fullscreen', String($('fullscreen').checked)));
         bind('offline', 'change', async () => {
             const enable = $('offline').checked;
@@ -735,6 +790,8 @@
         status('play-result-text', message);
         status('play-result-log', current.log);
         $('play-result').hidden = !message;
+        const warning = current.nameWarning || (state.nameSaveFailed ? 'saveFailed' : '');
+        status('player-name-warning', warning ? t('playerName.' + warning) : '');
     }
 
     async function followPlay() {
@@ -753,6 +810,7 @@
     }
 
     async function requestLauncherClose() {
+        if (state.finishNamePrompt) { state.finishNamePrompt(true); return; }
         if (state.confirmingClose) return;
         state.confirmingClose = true;
         try {
@@ -788,16 +846,37 @@
             button.setAttribute('aria-label', t(state.maximized ? 'window.restore' : 'window.maximize'));
         };
 
-        bind('play', 'click', async () => {
-            if (state.followingPlay) return;
-            $('play').disabled = true;
-            if (!await run('play-show23')) {
-                state.play = { result: 'busy' };
-                paintHome();
-                renderPlayResult();
-                return;
+        bind('save-player-name-play', 'click', () => state.finishNamePrompt?.(false));
+        bind('dismiss-player-name', 'click', () => state.finishNamePrompt?.(true));
+        bind('first-player-name', 'keydown', event => {
+            if (event.key === 'Enter' && !event.isComposing) {
+                event.preventDefault();
+                state.finishNamePrompt?.(false);
             }
-            await followPlay();
+        });
+        bind('play', 'click', async () => {
+            if (state.followingPlay || state.startingPlay) return;
+            state.startingPlay = true;
+            $('play').disabled = true;
+            try {
+                state.nameSaveFailed = false;
+                let name = state.settings.playerName;
+                if (!name) {
+                    name = await promptForPlayerName();
+                    state.nameSaveFailed = !await persistPlayerName(name);
+                    // Avoid repeating the prompt in this run if settings cannot be written.
+                    state.settings.playerName = name;
+                }
+                if (!await run('play-show23', { playerName: name })) {
+                    state.play = { result: 'busy' };
+                    renderPlayResult();
+                    return;
+                }
+                await followPlay();
+            } finally {
+                state.startingPlay = false;
+                paintHome();
+            }
         });
         bind('stop-play', 'click', async () => {
             if (await run('stop-play')) $('stop-play').disabled = true;

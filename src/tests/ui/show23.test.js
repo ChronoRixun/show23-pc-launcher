@@ -8,7 +8,7 @@ const setupResult = stages => ({ busy: false, stages });
 function open(overrides = {}) {
     const requests = [];
     const setup = {
-        'get-settings': { language: 'en', theme: 'default', offline: true, channel: 'stable' },
+        'get-settings': { playerName: 'Player', language: 'en', theme: 'default', offline: true, channel: 'stable' },
         'get-show23': { ready: false, folder: '' },
         'get-launcher-update': { enabled: false },
         'browse-folder': 'Q:\\Fixture\\Destination',
@@ -443,4 +443,102 @@ test('Play failure shows the diagnostic log in the result panel', async () => {
     assert.equal(view.id('play-result').hidden, false);
     assert.match(view.id('play-result-text').textContent, /12/);
     assert.equal(view.id('play-result-log').textContent, 'Wrong executable');
+});
+
+
+test('Settings saves a trimmed player name after checking length and characters', async () => {
+    const view = open({ 'get-settings': { language: 'en', playerName: '' }, 'save-setting': true });
+    await view.clock.advance(0);
+    const input = view.id('player-name');
+    const save = view.id('save-player-name');
+    assert.equal(input.value, '');
+    for (const invalid of ['AB', 'ABCDEFGHIJKLMNOPQ', 'Bad!Name', 'No\tTabs', 'Élodie']) {
+        input.value = invalid;
+        save.click();
+        await view.clock.advance(0);
+        assert.match(view.id('player-name-status').textContent, /3 to 16/);
+    }
+    assert.equal(view.requests.filter(row => row.command === 'save-setting').length, 0);
+    input.value = '  Batter_3-Home  ';
+    save.click();
+    await view.clock.advance(0);
+    const saved = view.requests.find(row => row.command === 'save-setting');
+    assert.equal(saved.payload.key, 'playerName');
+    assert.equal(saved.payload.value, 'Batter_3-Home');
+    assert.equal(input.value, 'Batter_3-Home');
+});
+
+test('First Play prefills a name and validates before saving and starting', async () => {
+    const view = open({
+        'get-settings': { language: 'en', playerName: '' },
+        'get-show23': { ready: true },
+        'suggest-player-name': 'Suggested',
+        'save-setting': true, 'play-show23': true, 'get-play': { phase: 'idle', result: 'finished' }
+    });
+    await view.clock.advance(0);
+    view.id('play').click();
+    await view.clock.advance(0);
+    const input = view.id('first-player-name');
+    const dialog = view.id('player-name-dialog');
+    const submit = view.id('save-player-name-play');
+    assert.equal(dialog.hidden, false);
+    assert.equal(input.value, 'Suggested');
+    assert.equal(view.document.activeElement, input);
+    input.value = '?';
+    submit.click();
+    await view.clock.advance(0);
+    assert.equal(dialog.hidden, false);
+    assert.equal(view.requests.some(row => row.command === 'play-show23'), false);
+    input.value = '  Edited Name  ';
+    submit.click();
+    await view.clock.advance(0);
+    assert.equal(dialog.hidden, true);
+    const relevant = view.requests.filter(row => ['save-setting', 'play-show23'].includes(row.command));
+    assert.equal(relevant[0].payload.value, 'Edited Name');
+    assert.equal(relevant[1].payload.playerName, 'Edited Name');
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.equal(view.requests.filter(row => row.command === 'suggest-player-name').length, 1);
+    assert.equal(view.requests.filter(row => row.command === 'play-show23').length, 2);
+});
+
+test('Dismissing the name prompt saves the suggestion and starts Play', async () => {
+    for (const method of ['close', 'escape']) {
+        const view = open({
+            'get-settings': { language: 'en', playerName: '' },
+            'get-show23': { ready: true },
+            'suggest-player-name': 'Suggested',
+            'save-setting': true, 'play-show23': true, 'get-play': { phase: 'idle', result: 'finished' }
+        });
+        await view.clock.advance(0);
+        view.id('play').click();
+        await view.clock.advance(0);
+        view.id('first-player-name').value = 'Discard Me';
+        if (method === 'escape') {
+            view.id('first-player-name').dispatchEvent(new view.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        } else view.id('dismiss-player-name').click();
+        await view.clock.advance(0);
+        assert.equal(view.id('player-name-dialog').hidden, true);
+        assert.equal(view.requests.find(row => row.command === 'save-setting').payload.value, 'Suggested');
+        assert.equal(view.requests.find(row => row.command === 'play-show23').payload.playerName, 'Suggested');
+    }
+});
+
+test('The profile warning appears alongside Play status and the exit result', async () => {
+    let finished = false;
+    const view = open({
+        'get-show23': { ready: true },
+        'play-show23': true,
+        'get-play': () => finished ? { phase: 'idle', result: 'finished', nameWarning: 'malformed' } :
+            { phase: 'playing', nameWarning: 'malformed' }
+    });
+    await view.clock.advance(0);
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.match(view.id('player-name-warning').textContent, /malformed.*unchanged/);
+    assert.equal(view.id('game-state').textContent, 'Playing');
+    finished = true;
+    await view.clock.advance(250);
+    assert.match(view.id('play-result-text').textContent, /exited/);
+    assert.equal(view.id('player-name-warning').hidden, false);
 });

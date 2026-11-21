@@ -25,6 +25,7 @@ namespace show23
         fs::path server;
         fs::path emulator;
         bool fullscreen{};
+        std::string player_name;
     };
 
     struct play_options
@@ -33,6 +34,7 @@ namespace show23
         std::chrono::milliseconds ready_timeout{std::chrono::seconds(60)};
         std::function<bool()> stop;
         std::function<void(play_phase)> phase;
+        std::function<void(const char*)> warning;
     };
 
     const char* phase_name(play_phase phase);

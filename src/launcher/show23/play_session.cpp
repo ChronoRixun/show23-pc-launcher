@@ -1,6 +1,7 @@
 #include "std_include.hpp"
 #include <WinSock2.h>
 #include "play_session.hpp"
+#include "player_name.hpp"
 #include "child_process.hpp"
 
 #include <iphlpapi.h>
@@ -227,6 +228,16 @@ namespace show23
         {
             server.stop();
             return {"certificate", 0, tail(server_log)};
+        }
+        if (stopped()) { server.stop(); return {"stopped"}; }
+
+        if (!request.player_name.empty())
+        {
+            auto result = player_name_result::unavailable;
+            try { result = write_player_name(profile.path, request.player_name); }
+            catch (const std::exception&) {}
+            if (options.warning && result != player_name_result::updated)
+                options.warning(result == player_name_result::malformed ? "malformed" : "unavailable");
         }
         if (stopped()) { server.stop(); return {"stopped"}; }
 

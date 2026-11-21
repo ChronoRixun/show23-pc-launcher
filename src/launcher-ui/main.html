@@ -99,6 +99,7 @@
                             <p id="play-result-text"></p>
                             <pre id="play-result-log" class="log" hidden></pre>
                         </section>
+                        <p class="status-line" id="player-name-warning" role="status" hidden></p>
                         <p class="status-line" id="game-status" role="status" hidden></p>
                         <p class="status-line game-source-notice" id="game-source-notice" role="status" hidden></p>
                         <section id="game-verification" class="panel setup-checklist" aria-labelledby="game-verification-title" hidden>
@@ -280,6 +281,15 @@
                                 <div><label for="offline" data-i18n="settings.offline">Offline mode</label><span class="set-help" data-i18n="settings.offlineHelp">Release checks and downloads are disabled after restarting in offline mode.</span></div>
                                 <input class="switch" type="checkbox" id="offline" role="switch">
                             </div>
+                            <div class="field">
+                                <label for="player-name" data-i18n="playerName.label">Player name</label>
+                                <div class="row">
+                                    <input id="player-name" class="path" type="text" autocomplete="off" aria-describedby="player-name-help player-name-status">
+                                    <button id="save-player-name" type="button" class="btn btn-secondary" data-i18n="playerName.save">Save</button>
+                                </div>
+                                <p id="player-name-help" class="hint" data-i18n="playerName.rules">Use 3 to 16 letters, digits, spaces, hyphens or underscores.</p>
+                                <p id="player-name-status" class="hint" role="status" hidden></p>
+                            </div>
                             <div class="set-row">
                                 <label for="fullscreen" data-i18n="play.fullscreen">Fullscreen</label>
                                 <input class="switch" type="checkbox" id="fullscreen" role="switch">
@@ -309,6 +319,18 @@
         </div>
     </div>
     <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+    <div id="player-name-dialog" class="scrim" hidden inert>
+        <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="first-player-name-label">
+            <div class="row" style="justify-content: space-between">
+                <h2 id="first-player-name-label" data-i18n="playerName.label">Player name</h2>
+                <button id="dismiss-player-name" type="button" class="icon-btn popup-close" data-escape data-i18n-aria="window.close" aria-label="Close"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-close"></use></svg></button>
+            </div>
+            <p class="hint" id="first-player-name-help" data-i18n="playerName.rules">Use 3 to 16 letters, digits, spaces, hyphens or underscores.</p>
+            <input id="first-player-name" class="path" type="text" autocomplete="off" aria-labelledby="first-player-name-label" aria-describedby="first-player-name-help first-player-name-error" data-autofocus>
+            <p id="first-player-name-error" class="hint" role="alert" hidden></p>
+            <div class="actions"><button id="save-player-name-play" type="button" class="btn btn-primary" data-i18n="playerName.savePlay">Save and play</button></div>
+        </section>
+    </div>
     <div id="message-box" class="scrim" inert>
         <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="message-box-title" aria-describedby="message-box-content">
             <h2 class="mb-title" id="message-box-title"></h2>

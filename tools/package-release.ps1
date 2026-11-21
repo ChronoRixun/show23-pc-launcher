@@ -80,7 +80,8 @@ foreach ($notice in $notices.Values) { Get-Plain $notice $false | Out-Null }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::OpenRead($PythonEmbedZip)
 $dist = Join-Path $repo 'dist'
-$name = "show23-pc-$Version-win64"
+# One zip serves new players and the launcher's self-update, which looks for this exact name.
+$name = "show23-pc-$Version-win64-portable"
 $stage = Join-Path $dist ('.release-' + [Guid]::NewGuid().ToString('N'))
 $tempZip = "$stage.zip"
 $zip = Join-Path $dist "$name.zip"
@@ -174,6 +175,17 @@ try {
     if ([IO.File]::Exists($zip)) { [IO.File]::Replace($tempZip, $zip, [NullString]::Value) }
     else { [IO.File]::Move($tempZip, $zip) }
     Save-Text (Join-Path $dist 'SHA256SUMS.txt') "$hash  $name.zip`n"
+    # The release manifest the launcher's updater reads (same shape as tools\package-portable.ps1 writes).
+    $manifest = [ordered] @{
+        schema = 1
+        part = 'launcher'
+        version = $Version
+        channel = $(if ($Version.Contains('-')) { 'beta' } else { 'stable' })
+        min_launcher = '0.1.0'
+        files = @(@{ path = "$name.zip"; size = $size; sha256 = $hash })
+        compatibility = [ordered] @{ emulator = '*'; server = '*'; profile = '*' }
+    }
+    Save-Text (Join-Path $dist 'launcher.json') (($manifest | ConvertTo-Json -Depth 4) + "`n")
     Write-Host "$zip ($size bytes, SHA-256 $hash)"
     Write-Host "Emulator source: $source"
 } finally {

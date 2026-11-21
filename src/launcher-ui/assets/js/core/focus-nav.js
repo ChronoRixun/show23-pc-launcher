@@ -22,7 +22,7 @@
     'use strict';
 
     // What is open on top of the page, from the bottom up when several are.
-    const LAYERS = '#message-box, .game-settings-backdrop, .component-selection-backdrop, .setup-flow-backdrop, .library-card-menu';
+    const LAYERS = '#player-name-dialog, #message-box, .game-settings-backdrop, .component-selection-backdrop, .setup-flow-backdrop, .library-card-menu';
     // The control Escape presses to close a layer, first match wins (the card menu has none: views.js
     // closes it on Escape itself).
     const CLOSE_CONTROLS = ['[data-escape]', '.popup-close', '[data-act="cancel"]', '.btn-cancel', '.btn-setup-cancel', '.dialog-close'];
