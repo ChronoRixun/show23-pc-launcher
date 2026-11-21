@@ -171,7 +171,7 @@ try {
     foreach ($output in $zip, (Join-Path $dist 'SHA256SUMS.txt')) {
         if (Test-Path -LiteralPath $output) { Get-Plain $output $false | Out-Null }
     }
-    if ([IO.File]::Exists($zip)) { [IO.File]::Replace($tempZip, $zip, $null) }
+    if ([IO.File]::Exists($zip)) { [IO.File]::Replace($tempZip, $zip, [NullString]::Value) }
     else { [IO.File]::Move($tempZip, $zip) }
     Save-Text (Join-Path $dist 'SHA256SUMS.txt') "$hash  $name.zip`n"
     Write-Host "$zip ($size bytes, SHA-256 $hash)"
