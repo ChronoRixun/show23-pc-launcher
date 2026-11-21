@@ -1,6 +1,6 @@
 #include "std_include.hpp"
 #include "check_inputs_cli.hpp"
-#include "show23/input_checks.hpp"
+#include "show23/setup_run.hpp"
 
 #include <cstdio>
 #include <rapidjson/writer.h>
@@ -9,15 +9,16 @@ namespace
 {
     int usage()
     {
-        std::fputs("Usage: show23-pc-tests.exe --check-inputs --base <path> [--update <path>] --install <folder>\n", stderr);
+        std::fputs("Usage: show23-pc-tests.exe (--check-inputs | --setup) --base <path> [--update <path>] --install <folder>\n", stderr);
         return 2;
     }
 
-    void print(const show23::finding& finding)
+    void print(const show23::finding& finding, const char* stage = nullptr)
     {
         rapidjson::StringBuffer buffer;
         rapidjson::Writer<rapidjson::StringBuffer> out(buffer);
         out.StartObject();
+        if (stage) { out.Key("stage"); out.String(stage); }
         out.Key("id");
         out.String(finding.id.c_str());
         out.Key("state");
@@ -38,7 +39,9 @@ namespace
 
 int run_check_inputs_cli(const std::span<wchar_t*> args)
 {
-    if (args.empty() || std::wstring_view(args.front()) != L"--check-inputs" || args.size() % 2 != 1) return usage();
+    if (args.empty() || args.size() % 2 != 1) return usage();
+    const std::wstring_view mode(args.front());
+    if (mode != L"--check-inputs" && mode != L"--setup") return usage();
     show23::setup_request request{show23::source_kind::automatic, {}, std::nullopt, {}};
     for (std::size_t at = 1; at < args.size(); at += 2)
     {
@@ -53,13 +56,21 @@ int run_check_inputs_cli(const std::span<wchar_t*> args)
     if (request.base.empty() || request.install.empty()) return usage();
     try
     {
+        if (mode == L"--setup")
+        {
+            const auto result = show23::run_setup(request, show23::default_setup_options());
+            for (std::size_t i = 0; i < result.stages.size(); ++i)
+                for (const auto& row : result.stages[i].findings)
+                    print(row, show23::stage_name(static_cast<show23::setup_stage>(i)));
+            return result.finished() ? 0 : 1;
+        }
         const auto result = show23::check_inputs(request, show23::default_input_check_options());
         for (const auto& row : result.findings) print(row);
         return result.passed() ? 0 : 1;
     }
     catch (const std::exception&)
     {
-        print({"check.internal", show23::finding_state::failed, {}});
+        print({"check.internal", show23::finding_state::failed, {}}, mode == L"--setup" ? "check" : nullptr);
         return 1;
     }
 }

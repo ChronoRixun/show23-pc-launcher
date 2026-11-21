@@ -9,7 +9,7 @@
     const pages = { show23: 'show23-page', setup: 'setup', mods: 'mods-panel', settings: 'settings-page', support: 'support-page' };
     const state = {
         page: 'show23', settings: {}, game: {}, parts: {}, mods: null,
-        sourceKind: 'package', setupBusy: false, setupDetails: '', location: 'installed',
+        sourceKind: 'folder', setupBusy: false, setupDetails: '', location: 'installed',
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
 
@@ -68,24 +68,35 @@
     function paintHome() {
         const game = state.game;
         const ready = !!game.ready;
-        $('game-state').textContent = t(ready ? 'game.ready' : 'game.notReady');
-        $('game-pill').className = ready ? 'pill ok' : 'pill warn';
-        $('game-state-dot').className = ready ? 'dot ok' : 'dot warn';
-        $('home-hero').classList.toggle('is-unset', !ready);
+        const setUp = ready || !!game.setUp;
+        const missing = !!game.gameMissing;
+        $('game-state').textContent = t(ready ? 'game.ready' : setUp ? 'inPlace.gameSetUp' : missing ? 'inPlace.gameMissing' : 'game.notReady');
+        $('game-pill').className = setUp ? 'pill ok' : 'pill warn';
+        $('game-state-dot').className = setUp ? 'dot ok' : 'dot warn';
+        $('home-hero').classList.toggle('is-unset', !setUp);
+        const sourceMessage = missing ? t(game.sourcePath ? 'inPlace.missingPath' : 'inPlace.invalidRecord', { path: game.sourcePath }) :
+            setUp && !ready ? t('inPlace.runtimeMissing') : '';
+        status('game-source-notice', sourceMessage);
         $('play').disabled = !ready;
         $('play').classList.toggle('btn-primary', ready);
         $('play').classList.toggle('btn-secondary', !ready);
         if (ready) $('play').setAttribute('data-autofocus', '');
         else $('play').removeAttribute('data-autofocus');
         $('setup-open').hidden = ready;
-        $('home-before').hidden = ready;
+        const setupLabel = setUp || missing ? 'inPlace.setUpAgain' : 'game.setup';
+        $('setup-open-label').setAttribute('data-i18n', setupLabel);
+        $('setup-open-label').textContent = t(setupLabel);
+        $('setup-open').classList.toggle('btn-primary', !setUp);
+        $('setup-open').classList.toggle('btn-secondary', setUp);
+        $('setup-open').classList.toggle('btn-lg', !setUp);
+        $('home-before').hidden = setUp || missing;
         $('home-ready').hidden = !ready;
         $('scorebug').hidden = !ready;
 
         const meta = $('game-meta');
         meta.textContent = '';
-        if (!ready) {
-            meta.textContent = t('game.intro');
+        if (!setUp) {
+            if (!missing) meta.textContent = t('game.intro');
             return;
         }
         const fields = [make('span', '', t('game.versionLine', { version: game.version || t('game.unknown') }))];
@@ -141,13 +152,13 @@
 
     function openSetup() {
         if (state.setupBusy) return;
-        state.sourceKind = 'package';
+        state.sourceKind = 'folder';
         $('base-path').value = '';
         $('update-path').value = '';
         $('install-path').value = state.game.folder || '';
         setRadio('base-kind', state.sourceKind);
         showPage('setup');
-        showPicker('base-package');
+        showPicker('base-folder');
     }
 
     async function pickPackage(title) {
@@ -155,6 +166,7 @@
     }
 
     function spaceText(bytes) {
+        if (bytes < 1024 ** 2) return new Intl.NumberFormat(window.LauncherI18n.getLanguage()).format(bytes) + ' B';
         const gib = bytes / (1024 ** 3);
         const format = new Intl.NumberFormat(window.LauncherI18n.getLanguage(), { maximumFractionDigits: 2 });
         return gib >= 1 ? format.format(gib) + ' GiB' : format.format(gib * 1024) + ' MiB';
@@ -163,6 +175,20 @@
     function findingText(row) {
         const [scope, field] = row.id.split('.');
         const values = row.values || {};
+        const part = t(values.part === 'update' ? 'checks.updateSource' : 'checks.baseSource');
+        if (scope === 'unpack') return t(field === 'inPlace' ? 'inPlace.usingFolder' :
+            values.part === 'update' ? 'inPlace.updatePackage' : 'inPlace.basePackage');
+        if (scope === 'settings' || scope === 'finish') return t('inPlace.' +
+            (scope === 'settings' && field !== 'written' ? (field === 'tree' ? 'settingsTree' : 'settingsRecord') : field));
+        if (scope === 'verify') {
+            const suffix = field === 'directory' ? { passed: 'directoryMatch', failed: 'directoryShort', notice: 'directoryExtra' }[row.state]
+                : field === 'executable' ? (row.state === 'passed' ? 'executableMatch' : 'executableChanged')
+                : field === 'record' ? 'recordInvalid' : field;
+            return t('inPlace.' + suffix, {
+                part, name: values.name,
+                difference: spaceText(values.difference || 0), actual: spaceText(values.actual || 0), expected: spaceText(values.expected || 0)
+            });
+        }
         const ok = row.state === 'passed';
         const reason = values.reason;
         const source = t(scope === 'update' ? 'checks.updateSource' : 'checks.baseSource');
@@ -179,7 +205,8 @@
                 case 'space':
                     if (reason === 'size') return t('checks.estimateFailed');
                     if (reason === 'unreadable') return t('checks.spaceUnknown');
-                    return t(ok ? 'checks.spaceOk' : 'checks.spaceLow', {
+                    return t(values.kind === 'in_place' ? (ok ? 'inPlace.spaceOk' : 'inPlace.spaceLow') :
+                        (ok ? 'checks.spaceOk' : 'checks.spaceLow'), {
                         needed: spaceText(values.needed), available: spaceText(values.available), drive: values.drive
                     });
             }
@@ -221,10 +248,10 @@
         }
     }
 
-    function showChecklist(rows) {
-        const list = $('setup-findings');
+    function showChecklist(rows, listId, sectionId) {
+        const list = $(listId);
         list.textContent = '';
-        $('setup-checklist').hidden = !rows.length;
+        $(sectionId).hidden = !rows.length;
         const symbols = { passed: 'check', failed: 'alert', notice: 'info', later: 'right' };
         return rows.map(row => {
             const text = findingText(row);
@@ -240,36 +267,47 @@
     }
 
     function showStage(reply) {
-        const stopped = reply !== null;
-        const unpackStop = reply?.stage === 'unpack';
+        const busy = reply?.busy ?? !reply;
+        const stages = reply?.stages || { check: { state: busy ? 'running' : 'failed', findings: busy ? [] : [{ id: 'check.internal', state: 'failed' }] } };
+        const finished = stages.finish?.state === 'done';
+        const unpackStop = stages.unpack?.state === 'stopped';
+        const states = { waiting: 'todo', running: 'current', done: 'done', not_needed: 'not-needed', stopped: 'stopped', failed: 'failed' };
         $('setup-picker').hidden = true;
         $('setup-progress').hidden = false;
-        $('setup-title').textContent = t(stopped ? 'setup.stopped' : 'setup.settingUp');
+        $('setup-title').textContent = t(busy ? 'setup.settingUp' : finished ? 'inPlace.setupComplete' : 'setup.stopped');
         $('setup-lede').textContent = '';
         for (const node of $('setup-stages').querySelectorAll('[data-stage]')) {
             const stage = node.dataset.stage;
-            const kind = stage === 'check' ? (unpackStop ? 'done' : stopped ? 'failed' : 'current')
-                : stage === 'unpack' && unpackStop ? 'stopped' : 'todo';
+            const outcome = stages[stage];
+            const kind = states[outcome?.state || 'waiting'];
             node.className = 'stage ' + kind;
-            node.querySelector('.glyph').setAttribute('d', kind === 'done' ? 'm10 16 4 4 8-8' : 'M16 10v7m0 4v.1');
-            node.querySelector('.stage-sub').textContent = t({
-                done: 'setup.done', failed: 'setup.failed', current: 'setup.checkingInputs', stopped: 'checks.notImplemented',
-                todo: stopped ? 'setup.notStarted' : 'setup.waiting'
+            node.querySelector('.glyph').setAttribute('d', kind === 'done' ? 'm10 16 4 4 8-8' : kind === 'not-needed' ? 'M10 16h12' : 'M16 10v7m0 4v.1');
+            const detail = outcome?.findings?.find(row => row.state === 'passed');
+            const label = t({
+                done: 'setup.done', failed: 'setup.failed', current: stage === 'check' ? 'setup.checkingInputs' : 'inPlace.working',
+                stopped: 'setup.stopped', 'not-needed': 'inPlace.notNeeded', todo: busy ? 'setup.waiting' : 'setup.notStarted'
             }[kind]);
+            node.querySelector('.stage-sub').textContent = detail && (stage === 'unpack' || stage === 'settings')
+                ? label + ' · ' + findingText(detail) : label;
         }
-        $('setup-pending').hidden = stopped;
-        $('setup-alert').hidden = !stopped;
+        $('setup-pending').hidden = !busy;
+        $('setup-alert').hidden = busy || finished;
         $('setup-alert').classList.toggle('is-stopped', unpackStop);
         $('setup-stop-icon').setAttribute('href', unpackStop ? '#icon-info' : '#icon-alert');
-        $('setup-failure-actions').hidden = !stopped;
-        $('setup-retry').hidden = unpackStop;
+        $('setup-failure-actions').hidden = busy;
+        $('setup-retry').hidden = unpackStop || finished;
+        $('setup-edit').hidden = finished;
+        $('setup-done').hidden = !finished;
 
-        const rows = reply?.findings || [];
-        const firstFailure = rows.find(row => row.state === 'failed');
-        const message = unpackStop ? t('setup.unpackPending') : firstFailure ? findingText(firstFailure) : '';
+        const firstFailure = Object.values(stages).flatMap(stage => stage.findings || []).find(row => row.state === 'failed');
+        const stop = stages.unpack?.findings?.[0];
+        const message = (unpackStop && stop) ? findingText(stop) : firstFailure ? findingText(firstFailure) : '';
         $('setup-status').textContent = message;
-        state.setupDetails = [message, ...showChecklist(rows)].filter(Boolean).join('\n');
-        if (stopped && state.page === 'setup') $(unpackStop ? 'setup-edit' : 'setup-retry').focus();
+        const input = showChecklist(stages.check?.findings || [], 'setup-findings', 'setup-checklist');
+        const verification = showChecklist(stages.verify?.findings || [], 'setup-verify-findings', 'setup-verification');
+        const other = ['unpack', 'settings', 'finish'].flatMap(stage => (stages[stage]?.findings || []).map(findingText));
+        state.setupDetails = [...new Set([message, ...input, ...verification, ...other].filter(Boolean))].join('\n');
+        if (!busy && state.page === 'setup') $(finished ? 'setup-done' : unpackStop ? 'setup-edit' : 'setup-retry').focus();
     }
 
     async function submitSetup() {
@@ -283,13 +321,13 @@
             });
             while (reply?.busy) {
                 reply = await run('get-setup-inputs');
-                if (reply?.busy) await sleep(160);
+                if (reply?.busy) { showStage(reply); await sleep(160); }
             }
-            showStage(reply?.findings?.length ? reply : { findings: [{ id: 'check.internal', state: 'failed' }] });
+            showStage(reply || {});
             await gameState();
         } catch (error) {
             console.error(error);
-            showStage({ findings: [{ id: 'check.internal', state: 'failed' }] });
+            showStage({});
         } finally {
             state.setupBusy = false;
             setupInputsChanged();
@@ -298,6 +336,7 @@
 
     async function verify() {
         $('verify').disabled = true;
+        showChecklist([], 'game-verify-findings', 'game-verification');
         status('game-status', t('game.verifying'));
         try {
             await run('verify-show23');
@@ -305,6 +344,8 @@
                 const result = await run('get-verify') || {};
                 if (!result.busy) {
                     status('game-status', result.message || t('support.error'));
+                    showChecklist(result.findings || [], 'game-verify-findings', 'game-verification');
+                    await gameState();
                     break;
                 }
                 await sleep(500);
@@ -507,6 +548,7 @@
         bind('setup-back', 'click', () => returnHome('setup-open'));
         bind('setup-cancel', 'click', () => returnHome('setup-open'));
         bind('setup-edit', 'click', () => showPicker('base-choose'));
+        bind('setup-done', 'click', () => returnHome('setup-open'));
         bind('setup-retry', 'click', submitSetup);
         bind('setup-continue', 'click', submitSetup);
         bind('copy-setup', 'click', () => copy(state.setupDetails, 'setup.detailsCopied'));

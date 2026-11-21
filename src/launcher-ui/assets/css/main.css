@@ -499,3 +499,9 @@ svg.icon { width: 16px; height: 16px; }
 .check-finding.later > .icon { color: var(--text-3); }
 .check-state { color: var(--text-3); font-size: 12px; }
 .check-text { overflow-wrap: anywhere; }
+
+.stage.not-needed .shape { stroke: var(--text-3); }
+.stage.not-needed .glyph { visibility: visible; stroke: var(--text-3); }
+.stage.not-needed .stage-sub { color: var(--text-2); }
+.stage.not-needed::before { background: var(--accent); }
+.game-source-notice { overflow-wrap: anywhere; }

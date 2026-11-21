@@ -133,7 +133,7 @@ TEST(check_inputs_requires_metadata_keys_and_reports_truncation)
     CHECK(reason(f.check(incomplete), "base.complete", "truncated"));
 }
 
-TEST(check_inputs_streams_known_folder_executables_and_estimates_directory_bytes)
+TEST(check_inputs_streams_known_folder_executables_and_budgets_install_space)
 {
     fixture f;
     const auto base = f.folder();
@@ -141,7 +141,7 @@ TEST(check_inputs_streams_known_folder_executables_and_estimates_directory_bytes
     const auto accepted = f.check(base, std::nullopt, source_kind::folder);
     CHECK(accepted.passed());
     CHECK(state(accepted, "base.executable", finding_state::passed));
-    CHECK(accepted.needed_bytes == allowance + input_fixtures::sfo().size() + 3 + 5);
+    CHECK(accepted.needed_bytes == allowance);
 
     f.file(L"base/eboot.bin", "def");
     const auto rejected = f.check(base);
@@ -228,7 +228,7 @@ TEST(check_inputs_checks_space_against_the_estimate_with_an_injected_answer)
 {
     fixture f;
     const auto base = f.folder();
-    f.options.free_space = [](const fs::path&) { return allowance; };
+    f.options.free_space = [](const fs::path&) { return allowance - 1; };
     const auto too_little = f.check(base);
     CHECK(!too_little.passed() && too_little.needed_bytes > too_little.available_bytes);
     CHECK(state(too_little, "install.space", finding_state::failed));

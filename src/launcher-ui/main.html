@@ -85,7 +85,7 @@
                             <h1 class="hero-title">MLB The Show 23</h1>
                             <div class="hero-meta" id="game-meta"></div>
                             <div class="actions">
-                                <button type="button" class="btn btn-primary btn-lg" id="setup-open" data-autofocus data-view-target="setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-box"></use></svg><span data-i18n="game.setup">Set up</span></button>
+                                <button type="button" class="btn btn-primary btn-lg" id="setup-open" data-autofocus data-view-target="setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-box"></use></svg><span id="setup-open-label" data-i18n="game.setup">Set up</span></button>
                                 <button type="button" class="btn btn-secondary btn-lg" id="play" disabled><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span data-i18n="game.play">Play</span></button>
                                 <button type="button" class="btn btn-secondary" id="verify"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-shield"></use></svg><span data-i18n="game.verify">Verify Files</span></button>
                                 <button type="button" class="btn btn-secondary" id="mods" data-view-target="mods-panel"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-layers"></use></svg><span data-i18n="game.mods">Mods</span></button>
@@ -94,12 +94,17 @@
                     </header>
                     <div class="home-details">
                         <p class="status-line" id="game-status" role="status" hidden></p>
+                        <p class="status-line game-source-notice" id="game-source-notice" role="status" hidden></p>
+                        <section id="game-verification" class="panel setup-checklist" aria-labelledby="game-verification-title" hidden>
+                            <h2 class="section-h" id="game-verification-title" data-i18n="inPlace.verifyHeading">Game folder verification</h2>
+                            <ul id="game-verify-findings"></ul>
+                        </section>
                         <section id="home-before" class="panel">
                             <h2 class="section-h" data-i18n="game.before">Before you start</h2>
                             <ol class="before-list">
-                                <li><span class="step-num" aria-hidden="true">1</span><div><strong data-i18n="game.beforeGame">Your copy of the game</strong><p data-i18n="game.beforeGameHelp">The package file, or a folder you already unpacked.</p></div></li>
-                                <li><span class="step-num" aria-hidden="true">2</span><div><strong data-i18n="game.beforeUpdate">The 1.21 update</strong> <span class="faint" data-i18n="setup.optionalInline">(optional)</span><p data-i18n="game.beforeUpdateHelp">Its update package, if you have it.</p></div></li>
-                                <li><span class="step-num" aria-hidden="true">3</span><div><strong data-i18n="game.beforeInstall">An install folder</strong><p data-i18n="game.beforeInstallHelp">On a drive with room for the unpacked game.</p></div></li>
+                                <li><span class="step-num" aria-hidden="true">1</span><div><strong data-i18n="game.beforeGame">Your copy of the game</strong><p data-i18n="game.beforeGameHelp">Use your unpacked game folder where it is.</p></div></li>
+                                <li><span class="step-num" aria-hidden="true">2</span><div><strong data-i18n="game.beforeUpdate">The 1.21 update</strong> <span class="faint" data-i18n="setup.optionalInline">(optional)</span><p data-i18n="game.beforeUpdateHelp">Choose its unpacked folder if you have it.</p></div></li>
+                                <li><span class="step-num" aria-hidden="true">3</span><div><strong data-i18n="game.beforeInstall">An install folder</strong><p data-i18n="game.beforeInstallHelp">On a local drive with at least 2 GiB free.</p></div></li>
                             </ol>
                         </section>
                         <div id="home-ready" hidden>
@@ -123,7 +128,7 @@
                         <nav class="crumb" data-i18n-aria="game.setup" aria-label="Set up"><button id="setup-back" type="button" data-page-back>MLB The Show 23</button><span aria-hidden="true">/</span><span data-i18n="game.setup">Set up</span></nav>
                         <div>
                             <h1 class="page-title" id="setup-title">Set up MLB The Show 23</h1>
-                            <p class="page-lede" id="setup-lede">Choose your copy of the game and where to install it.</p>
+                            <p class="page-lede" id="setup-lede">Choose your unpacked game folder and where to save launcher files.</p>
                         </div>
                     </header>
                     <div id="setup-picker">
@@ -131,12 +136,12 @@
                             <div class="field">
                                 <label class="field-label" id="base-label" for="base-path"><span class="step-num" aria-hidden="true">1</span><span data-i18n="setup.base">Base game</span></label>
                                 <div class="choice-row toggle-group" id="base-kind" role="radiogroup" aria-labelledby="base-label">
-                                    <button type="button" class="choice toggle-btn on" id="base-package" role="radio" aria-checked="true" tabindex="0" data-choice="package"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.packageType">Game package</b><span data-i18n="setup.packageHelp">A single package file (.pkg)</span></span></button>
-                                    <button type="button" class="choice toggle-btn" id="base-folder" role="radio" aria-checked="false" tabindex="-1" data-choice="folder"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.folderType">Unpacked folder</b><span data-i18n="setup.folderHelp">A folder you have already unpacked</span></span></button>
+                                    <button type="button" class="choice toggle-btn on" id="base-folder" role="radio" aria-checked="true" tabindex="0" data-choice="folder"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.folderType">Unpacked folder</b><span data-i18n="setup.folderHelp">A folder you have already unpacked</span></span></button>
+                                    <button type="button" class="choice toggle-btn" id="base-package" role="radio" aria-checked="false" tabindex="-1" data-choice="package"><span class="radio" aria-hidden="true"></span><span><b data-i18n="setup.packageType">Game package</b><span data-i18n="setup.packageHelp">This version can identify a package, but cannot unpack it.</span></span></button>
                                 </div>
                                 <div class="row">
                                     <input class="path" id="base-path" type="text" data-i18n-placeholder="setup.noBase" placeholder="No base game chosen" readonly>
-                                    <button type="button" class="btn btn-secondary" id="base-choose">Choose package</button>
+                                    <button type="button" class="btn btn-secondary" id="base-choose">Choose folder</button>
                                 </div>
                                 <p id="base-hint" class="hint" role="status" hidden></p>
                             </div>
@@ -190,10 +195,14 @@
                                 <h2 class="section-h" id="setup-checklist-title" data-i18n="checks.heading">Input checklist</h2>
                                 <ul id="setup-findings"></ul>
                             </section>
+                            <section id="setup-verification" class="setup-checklist" aria-labelledby="setup-verification-title" hidden>
+                                <h2 class="section-h" id="setup-verification-title" data-i18n="inPlace.verifyHeading">Game folder verification</h2>
+                                <ul id="setup-verify-findings"></ul>
+                            </section>
                         </div>
                         <footer class="setup-footer spread" id="setup-failure-actions" hidden>
                             <button type="button" class="btn btn-ghost" id="copy-setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-copy"></use></svg><span data-i18n="setup.copyDetails">Copy details</span></button>
-                            <div class="actions"><button type="button" class="btn btn-secondary" id="setup-edit"><span data-i18n="setup.backTo">Back to set up</span></button><button type="button" class="btn btn-primary" id="setup-retry"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="setup.tryAgain">Try again</span></button></div>
+                            <div class="actions"><button type="button" class="btn btn-primary" id="setup-done" hidden><span data-i18n="inPlace.home">Back to game</span></button><button type="button" class="btn btn-secondary" id="setup-edit"><span data-i18n="setup.backTo">Back to set up</span></button><button type="button" class="btn btn-primary" id="setup-retry"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="setup.tryAgain">Try again</span></button></div>
                         </footer>
                     </div>
                 </section>

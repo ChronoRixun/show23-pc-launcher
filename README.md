@@ -6,7 +6,7 @@ A Windows launcher for running your own copy of MLB The Show 23 with the compani
 
 ## Status
 
-This is an early source tree. Set up lets you choose a base game package or unpacked folder, an optional 1.21 update package, and the install folder. Setup, runtime installation and repair, and starting the server and emulator are pending. Play is disabled until the launcher has an adopted game and the required runtime parts. Verify Files can check the installed runtime against local manifests. Mods manages local content pack folders under `data/mods/`.
+Set up verifies an unpacked 1.00 base folder and an optional unpacked 1.21 update folder, then records their locations in the selected install folder. The game folders stay where they are. The launcher can identify packages, but you need your own tool to unpack them. Verify Files checks the recorded game folders and any installed runtime. Runtime installation, repair, and starting the server and emulator are pending, so setting up the game does not enable Play. Mods manages local content pack folders under `data/mods/`.
 
 ## Build from source
 

@@ -4,11 +4,9 @@
 #include "package_header.hpp"
 #include "sfo.hpp"
 
-#include <utils/cryptography.hpp>
 #include <utils/properties.hpp>
 
 #include <algorithm>
-#include <array>
 #include <limits>
 
 namespace show23
@@ -126,22 +124,10 @@ namespace show23
                 add(report, prefix + ".executable", failed, {{"reason", std::string("digest")}});
                 return;
             }
-            utils::cryptography::sha256::stream hash;
-            std::array<char, 64 * 1024> bytes{};
-            std::uint64_t offset = 0;
-            while (offset < binary.length)
-            {
-                const auto length = static_cast<std::size_t>((std::min<std::uint64_t>)(bytes.size(), binary.length - offset));
-                if (!input_paths::read_at(binary.pins.back().get(), offset, std::span(bytes).first(length)))
-                {
-                    add(report, prefix + ".executable", failed, {{"reason", std::string("unreadable")}});
-                    return;
-                }
-                hash.update(bytes.data(), length);
-                offset += length;
-            }
-            const auto known = hash.finish_hex() == expected.sha256;
-            add(report, prefix + ".executable", known ? passed : failed, {{"reason", std::string(known ? "" : "digest")}});
+            const auto digest = input_paths::sha256(binary);
+            const auto known = digest && *digest == expected.sha256;
+            add(report, prefix + ".executable", known ? passed : failed,
+                {{"reason", std::string(known ? "" : digest ? "digest" : "unreadable")}});
         }
 
         source check_source(checked_inputs& report, const fs::path& path, const source_kind kind,
@@ -167,7 +153,7 @@ namespace show23
             {
                 found.metadata = folder_metadata(report, prefix, input.path);
                 const auto size = input_paths::folder_size(input.path);
-                if (size && *size <= max_bytes - staging_allowance) found.needed = *size + staging_allowance;
+                if (size) found.needed = staging_allowance;
                 add(report, prefix + ".complete", found.needed ? passed : failed,
                     {{"kind", std::string("folder")}, {"reason", std::string(found.needed ? "" : "folder")}});
                 if (found.metadata)
@@ -256,7 +242,8 @@ namespace show23
                 return;
             }
             finding_values values{{"needed", *report.needed_bytes},
-                {"drive", destination.path.root_name().string()}};
+                {"drive", destination.path.root_name().string()},
+                {"kind", std::string(base.directory ? "in_place" : "package")}};
             if (report.available_bytes) values.emplace("available", *report.available_bytes);
             else values.emplace("reason", std::string("unreadable"));
             const auto sufficient = report.available_bytes && *report.available_bytes >= *report.needed_bytes;
@@ -310,8 +297,15 @@ namespace show23
             }
         }
         const auto extra = answer.has_update ? update.needed : std::optional<std::uint64_t>(0);
-        if (base.needed && extra && *extra <= max_bytes - *base.needed)
-            answer.needed_bytes = *base.needed + *extra;
+        if (base.needed && extra)
+        {
+            if (base.directory) answer.needed_bytes = staging_allowance;
+            else if (*extra <= max_bytes - *base.needed) answer.needed_bytes = *base.needed + *extra;
+        }
+        answer.request.kind = base.path.empty() ? request.kind : base.directory ? source_kind::folder : source_kind::package;
+        if (!base.path.empty()) answer.request.base = base.path;
+        if (!update.path.empty()) answer.request.update = update.path;
+        answer.update_is_package = answer.has_update && !update.directory;
         check_destination(answer, base, update, options);
         return answer;
     }

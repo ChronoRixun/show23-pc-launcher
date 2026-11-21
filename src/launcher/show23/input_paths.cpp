@@ -1,7 +1,10 @@
 #include "std_include.hpp"
 #include "input_paths.hpp"
 
+#include <utils/cryptography.hpp>
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <limits>
 #include <iterator>
@@ -47,14 +50,14 @@ namespace show23
 
 namespace show23::input_paths
 {
+    std::wstring extended(const fs::path& path)
+    {
+        auto preferred = path;
+        return L"\\\\?\\" + preferred.make_preferred().native();
+    }
+
     namespace
     {
-        std::wstring extended(const fs::path& path)
-        {
-            auto preferred = path;
-            return L"\\\\?\\" + preferred.make_preferred().native();
-        }
-
         fs::path resolved(const HANDLE file)
         {
             const auto length = GetFinalPathNameByHandleW(file, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -182,6 +185,7 @@ namespace show23::input_paths
             return result;
         }
         result.present = true;
+        result.links = info.nNumberOfLinks;
         result.directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         result.length = (static_cast<std::uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
         result.path = resolved(result.pins.back().get());
@@ -213,10 +217,28 @@ namespace show23::input_paths
             ReadFile(file, out.data(), static_cast<DWORD>(out.size()), &actual, nullptr) && actual == out.size();
     }
 
+    std::optional<std::string> sha256(const location& file)
+    {
+        if (file.error != path_error::none || !file.present || file.directory) return std::nullopt;
+        utils::cryptography::sha256::stream hash;
+        std::array<char, 64 * 1024> bytes{};
+        std::uint64_t offset = 0;
+        while (offset < file.length)
+        {
+            const auto length = static_cast<std::size_t>((std::min<std::uint64_t>)(bytes.size(), file.length - offset));
+            if (!read_at(file.pins.back().get(), offset, std::span(bytes).first(length))) return std::nullopt;
+            hash.update(bytes.data(), length);
+            offset += length;
+        }
+        return hash.finish_hex();
+    }
+
     std::optional<std::uint64_t> folder_size(const fs::path& folder)
     {
+        const auto root = inspect(folder);
+        if (root.error != path_error::none || !root.directory) return std::nullopt;
         std::uint64_t size = 0;
-        return sum_folder(folder, size, 0) ? std::optional(size) : std::nullopt;
+        return sum_folder(root.path, size, 0) ? std::optional(size) : std::nullopt;
     }
 
     bool probe(const fs::path& existing, const bool creating_folder)

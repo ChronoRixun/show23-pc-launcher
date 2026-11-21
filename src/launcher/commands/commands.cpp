@@ -4,7 +4,7 @@
 #include "support_commands.hpp"
 #include "ui_commands.hpp"
 #include "cef/cef_ui.hpp"
-#include "show23/setup.hpp"
+#include "show23/setup_run.hpp"
 #include "updater/launcher_update.hpp"
 #include "updater/part_store.hpp"
 #include "updater/release_source.hpp"
@@ -45,24 +45,16 @@ namespace commands
             std::mutex mutex;
             bool busy{};
             std::string message;
+            std::vector<show23::finding> findings;
         };
         task verify;
         bool setup_busy{};
-        std::optional<show23::checked_inputs> setup_result;
+        show23::setup_report setup_result;
 
-        void write_setup(rapidjson::Document& response, const show23::checked_inputs& checked)
+        rapidjson::Value write_findings(const std::vector<show23::finding>& rows, rapidjson::Document::AllocatorType& allocator)
         {
-            response.SetObject();
-            auto& allocator = response.GetAllocator();
-            response.AddMember("busy", false, allocator);
-            response.AddMember("stage", rapidjson::StringRef(checked.passed() ? "unpack" : "check"), allocator);
-            response.AddMember("baseVersion", json(checked.base_version, allocator), allocator);
-            response.AddMember("hasUpdate", checked.has_update, allocator);
-            response.AddMember("updateVersion", json(checked.update_version, allocator), allocator);
-            if (checked.needed_bytes) response.AddMember("neededBytes", *checked.needed_bytes, allocator);
-            if (checked.available_bytes) response.AddMember("availableBytes", *checked.available_bytes, allocator);
             rapidjson::Value findings(rapidjson::kArrayType);
-            for (const auto& finding : checked.findings)
+            for (const auto& finding : rows)
             {
                 rapidjson::Value row(rapidjson::kObjectType);
                 row.AddMember("id", json(finding.id, allocator), allocator);
@@ -78,14 +70,32 @@ namespace commands
                 row.AddMember("values", values, allocator);
                 findings.PushBack(row, allocator);
             }
-            response.AddMember("findings", findings, allocator);
+            return findings;
         }
 
-        show23::checked_inputs setup_failure(const char* id)
+        void write_setup(rapidjson::Document& response, const show23::setup_report& report, const bool busy = false)
         {
-            show23::checked_inputs checked;
-            checked.findings.push_back({id, show23::finding_state::failed, {}});
-            return checked;
+            response.SetObject();
+            auto& a = response.GetAllocator();
+            response.AddMember("busy", busy, a);
+            rapidjson::Value stages(rapidjson::kObjectType);
+            for (std::size_t i = 0; i < report.stages.size(); ++i)
+            {
+                const auto& stage = report.stages[i];
+                rapidjson::Value item(rapidjson::kObjectType);
+                item.AddMember("state", rapidjson::StringRef(show23::stage_state_name(stage.state)), a);
+                item.AddMember("findings", write_findings(stage.findings, a), a);
+                const auto name = show23::stage_name(static_cast<show23::setup_stage>(i));
+                stages.AddMember(rapidjson::Value(rapidjson::StringRef(name)), item, a);
+            }
+            response.AddMember("stages", stages, a);
+        }
+
+        show23::setup_report setup_failure(const char* id)
+        {
+            show23::setup_report report;
+            report.stages.front() = {show23::stage_state::failed, {{id, show23::finding_state::failed, {}}}};
+            return report;
         }
         struct update_state
         {
@@ -298,11 +308,17 @@ namespace commands
                 const auto install = show23::install_folder();
                 response.SetObject();
                 auto& a = response.GetAllocator();
-                const auto ready = install && parts::ready(runtime);
-                const auto game = ready ? parts::read_game_display(*install) : parts::game_display{};
-                response.AddMember("ready", ready, a);
-                response.AddMember("version", json(game.version, a), a);
-                response.AddMember("updated", game.updated, a);
+                const auto game = install ? show23::inspect_game(*install) : show23::game_presence{};
+                const auto set_up = game.state == show23::record_state::ready;
+                const auto missing = game.state == show23::record_state::invalid;
+                const auto updated = set_up && game.record->update.has_value();
+                const auto version = set_up ? (updated ? game.record->update->version : game.record->base.version) : std::string{};
+                response.AddMember("ready", set_up && parts::runtime_ready(runtime), a);
+                response.AddMember("setUp", set_up, a);
+                response.AddMember("gameMissing", missing, a);
+                response.AddMember("sourcePath", json(utils::string::path_to_utf8(game.source_path), a), a);
+                response.AddMember("version", json(version, a), a);
+                response.AddMember("updated", updated, a);
                 response.AddMember("folder", json(install ? utils::string::path_to_utf8(*install) : std::string{}, a), a);
             });
 
@@ -327,19 +343,28 @@ namespace commands
                     write_setup(response, setup_failure("check.busy"));
                     return;
                 }
-                setup_result.reset();
+                setup_result = {};
+                setup_result.stages.front().state = show23::stage_state::running;
                 setup_busy = true;
                 verify.message.clear();
+                verify.findings.clear();
                 try
                 {
                     std::thread([request]
                     {
-                        show23::checked_inputs checked;
-                        try { checked = show23::begin_setup(request); }
-                        catch (...) { checked = setup_failure("check.internal"); }
+                        show23::setup_report outcome;
+                        try
+                        {
+                            outcome = show23::run_setup(request, show23::default_setup_options(), [](const auto& latest)
+                            {
+                                std::lock_guard update(verify.mutex);
+                                setup_result = latest;
+                            });
+                        }
+                        catch (...) { outcome = setup_failure("check.internal"); }
 
                         std::lock_guard completed(verify.mutex);
-                        setup_result = std::move(checked);
+                        setup_result = std::move(outcome);
                         setup_busy = false;
                     }).detach();
                     response.SetObject();
@@ -355,13 +380,7 @@ namespace commands
             ui.add_command("get-setup-inputs", [](const auto&, rapidjson::Document& response)
             {
                 std::lock_guard lock(verify.mutex);
-                if (setup_result)
-                {
-                    write_setup(response, *setup_result);
-                    return;
-                }
-                response.SetObject();
-                response.AddMember("busy", setup_busy, response.GetAllocator());
+                write_setup(response, setup_result, setup_busy);
             });
 
             ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)
@@ -390,15 +409,27 @@ namespace commands
                 if (verify.busy || setup_busy) return;
                 verify.busy = true;
                 verify.message.clear();
+                verify.findings.clear();
                 try
                 {
-                    std::thread([runtime = parts::installed()]
+                    std::thread([]
                     {
+                        std::vector<show23::finding> findings;
+                        try
+                        {
+                            const auto install = show23::install_folder();
+                            const auto game = install ? show23::inspect_game(*install) : show23::game_presence{};
+                            if (game.record) findings = show23::verify_recorded_game(*game.record);
+                            else if (game.state == show23::record_state::invalid)
+                                findings.push_back({"verify.record", show23::finding_state::failed, {}});
+                        }
+                        catch (...) { findings.push_back({"verify.record", show23::finding_state::failed, {}}); }
                         std::string outcome;
-                        try { outcome = parts::verify_files(runtime); }
-                        catch (const std::exception&) { outcome = "Could not verify the runtime files."; }
+                        try { outcome = parts::verify_files(parts::installed()); }
+                        catch (...) { outcome = "Could not verify the runtime files."; }
                         std::lock_guard finish(verify.mutex);
                         verify.message = std::move(outcome);
+                        verify.findings = std::move(findings);
                         verify.busy = false;
                     }).detach();
                     response.SetBool(true);
@@ -415,6 +446,7 @@ namespace commands
                 std::lock_guard lock(verify.mutex);
                 result(response, verify.message);
                 response.AddMember("busy", verify.busy, response.GetAllocator());
+                response.AddMember("findings", write_findings(verify.findings, response.GetAllocator()), response.GetAllocator());
             });
         }
     }

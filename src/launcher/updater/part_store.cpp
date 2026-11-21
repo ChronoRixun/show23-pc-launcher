@@ -2,7 +2,7 @@
 #include "part_store.hpp"
 #include "launcher_update.hpp"
 #include "show23/setup.hpp"
-#include "show23/game_version.hpp"
+#include "show23/game_record.hpp"
 
 #include <utils/cryptography.hpp>
 #include <utils/properties.hpp>
@@ -122,13 +122,13 @@ namespace parts
     bool ready(const installed_runtime& runtime)
     {
         const auto install = show23::install_folder();
-        if (!install || runtime.root.empty() || !runtime.error.empty() ||
+        return install && runtime_ready(runtime) && show23::inspect_game(*install).state == show23::record_state::ready;
+    }
+
+    bool runtime_ready(const installed_runtime& runtime)
+    {
+        if (runtime.root.empty() || !runtime.error.empty() ||
             !compatibility_error(runtime.manifests, launcher_update::running_version()).empty()) return false;
-        const auto game = *install / "data" / "games" / show23::title_id;
-        if (!directory(game / "base")) return false;
-        auto marker = read_small(*install / "manifests" / "game-ready.txt", 32);
-        while (!marker.empty() && (marker.back() == '\r' || marker.back() == '\n')) marker.pop_back();
-        if (marker != show23::title_id) return false;
         for (const auto part : all)
         {
             if (part != id::launcher && (!runtime.manifests[index(part)] || !directory(component_folder(runtime, part)))) return false;
@@ -136,18 +136,10 @@ namespace parts
         return true;
     }
 
-    game_display read_game_display(const fs::path& install)
-    {
-        const auto game = install / "data" / "games" / show23::title_id;
-        const auto has_update = directory(game / "update");
-        const auto source = game / (has_update ? "update" : "base") / "sce_sys" / "param.sfo";
-        return {show23::parse_app_version(read_small(source, 64 * 1024)), has_update};
-    }
-
     std::string verify_files(const installed_runtime& runtime)
     {
         if (!runtime.error.empty()) return runtime.error;
-        if (runtime.root.empty()) return "No active runtime to verify. Set up the game first.";
+        if (runtime.root.empty()) return "No active runtime to verify.";
         const auto compatibility = compatibility_error(runtime.manifests, launcher_update::running_version());
         if (!compatibility.empty()) return compatibility;
 
@@ -170,6 +162,6 @@ namespace parts
         }
         if (failed) return std::format("{} of {} runtime files failed verification (first: {}). Repair is not implemented in this version.",
                                        failed, checked, first);
-        return std::format("Verified {} runtime files. Game file verification is not implemented in this version.", checked);
+        return std::format("Verified {} runtime files.", checked);
     }
 }

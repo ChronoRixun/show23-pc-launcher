@@ -1,6 +1,6 @@
 #include "std_include.hpp"
 #include "setup.hpp"
-#include "input_checks.hpp"
+#include "input_paths.hpp"
 
 #include <utils/properties.hpp>
 #include <utils/property_keys.hpp>
@@ -8,11 +8,6 @@
 
 namespace show23
 {
-    namespace
-    {
-        constexpr step_result setup_pending{status::not_implemented, "Setup is not implemented in this version."};
-    }
-
     std::optional<fs::path> install_folder()
     {
         const auto saved = utils::properties::load(property_keys::INSTALL);
@@ -21,18 +16,15 @@ namespace show23
         return is_local_path(path) ? std::optional(path) : std::nullopt;
     }
 
-    checked_inputs begin_setup(const setup_request& request)
+    bool remember_install(const fs::path& install)
     {
-        auto report = check_inputs(request, default_input_check_options());
-        if (report.passed())
-            utils::properties::store(property_keys::INSTALL, utils::string::path_to_utf8(request.install));
-        return report;
+        const auto properties = input_paths::inspect(utils::properties::get_appdata_path() / "user" / "properties.json", true);
+        if (properties.error != input_paths::path_error::none || properties.directory || properties.links > 1) return false;
+        const auto path = utils::string::path_to_utf8(install);
+        utils::properties::store(property_keys::INSTALL, path);
+        return utils::properties::load(property_keys::INSTALL) == path;
     }
 
-    step_result unpack_into_staging(const checked_inputs&, const fs::path&, staged_game&) { return setup_pending; }
-    step_result verify_game(const staged_game&, const fs::path&) { return setup_pending; }
-    step_result generate_settings(const checked_inputs&, const staged_game&, const fs::path&) { return setup_pending; }
-    step_result adopt_install(const staged_game&, const fs::path&) { return setup_pending; }
     step_result start_local_server(const fs::path&, const fs::path&)
     {
         return {status::not_implemented, "Starting the local server is not implemented in this version."};

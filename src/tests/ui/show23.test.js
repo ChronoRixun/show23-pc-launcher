@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const { page, test } = require('./harness');
 
+const stage = (state, findings = []) => ({ state, findings });
+const finding = (id, state, values = {}) => ({ id, state, values });
+const setupResult = stages => ({ busy: false, stages });
+
 function open(overrides = {}) {
     const requests = [];
     const setup = {
@@ -10,9 +14,7 @@ function open(overrides = {}) {
         'browse-folder': 'Q:\\Fixture\\Destination',
         'browse-file': 'Q:\\Fixture\\Source.pkg',
         'setup-show23': { busy: true },
-        'get-setup-inputs': { busy: false, stage: 'check', findings: [
-            { id: 'base.complete', state: 'failed', values: { reason: 'truncated' } }
-        ] },
+        'get-setup-inputs': setupResult({ check: stage('failed', [finding('base.complete', 'failed', { reason: 'truncated' })]) }),
         ...overrides
     };
     const view = page({
@@ -35,6 +37,8 @@ test('show23: setup captures the chosen inputs and stops before enabling Play', 
     id('setup-open').click();
     assert.equal(id('setup').hidden, false);
     assert.equal(id('setup-continue').disabled, true);
+    assert.equal(id('base-folder').getAttribute('aria-checked'), 'true');
+    id('base-package').click();
     id('base-choose').click();
     id('install-folder').click();
     await view.clock.advance(0);
@@ -187,31 +191,70 @@ async function submitChecklist(view) {
     await view.clock.advance(0);
 }
 
-test('check inputs: a pass lists the findings and stops at Unpack', async () => {
-    const view = open({
-        'setup-show23': { busy: true },
-        'get-setup-inputs': { busy: false, stage: 'unpack', findings: [
-            { id: 'base.version', state: 'passed', values: { version: '1.00' } },
-            { id: 'base.executable', state: 'later', values: {} },
-            { id: 'update.offline', state: 'notice', values: {} }
-        ] }
-    });
+test('setup: a base package stops at Unpack after listing the input findings', async () => {
+    const view = open({ 'get-setup-inputs': setupResult({
+        check: stage('done', [
+            finding('base.version', 'passed', { version: '1.00' }),
+            finding('base.executable', 'later'), finding('update.offline', 'notice')
+        ]),
+        unpack: stage('stopped', [finding('unpack.package', 'later', { part: 'base' })])
+    }) });
     await submitChecklist(view);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('done'), true);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="unpack"]').classList.contains('stopped'), true);
-    assert.match(view.id('setup-status').textContent, /Unpack is not implemented/i);
+    assert.match(view.id('setup-status').textContent, /cannot unpack the base game package/i);
     assert.equal(view.id('setup-findings').children.length, 3);
     assert.match(view.id('setup-findings').textContent, /1\.00/);
+    assert.equal(view.id('setup-retry').hidden, true);
+    assert.equal(view.document.activeElement, view.id('setup-edit'));
+});
+
+test('setup: a package update stops at Unpack with update-specific instructions', async () => {
+    const view = open({ 'get-setup-inputs': setupResult({
+        check: stage('done'), unpack: stage('stopped', [finding('unpack.package', 'later', { part: 'update' })])
+    }) });
+    await submitChecklist(view);
+    assert.match(view.id('setup-status').textContent, /cannot unpack the update package.*choose the unpacked update folder/i);
+    assert.equal(view.id('setup-edit').hidden, false);
+    assert.equal(view.id('setup-retry').hidden, true);
+});
+
+test('setup: an unpacked folder skips Unpack and successful Verify lists the findings', async () => {
+    const view = open({ 'get-setup-inputs': setupResult({
+        check: stage('done'), unpack: stage('not_needed', [finding('unpack.inPlace', 'passed')]),
+        verify: stage('done', [finding('verify.directory', 'passed', { part: 'base', name: 'PS4', actual: 4 })]),
+        settings: stage('done', [finding('settings.written', 'passed')]), finish: stage('done', [finding('finish.ready', 'passed')])
+    }) });
+    await submitChecklist(view);
+    const unpack = view.id('setup-stages').querySelector('[data-stage="unpack"]');
+    assert.equal(unpack.classList.contains('not-needed'), true);
+    assert.match(unpack.querySelector('.stage-sub').textContent, /Not needed.*Using your unpacked folder where it is/);
+    assert.equal(view.id('setup-verification').hidden, false);
+    assert.match(view.id('setup-verify-findings').textContent, /PS4 sizes match the reference/);
+    assert.match(view.id('setup-stages').querySelector('[data-stage="settings"] .stage-sub').textContent, /game record was written/);
+    assert.equal(view.id('setup-alert').hidden, true);
+    assert.equal(view.document.activeElement, view.id('setup-done'));
+});
+
+test('setup: Verify failure names the short directory and displays notice findings', async () => {
+    const view = open({ 'get-setup-inputs': setupResult({
+        check: stage('done'), unpack: stage('not_needed', [finding('unpack.inPlace', 'passed')]),
+        verify: stage('failed', [
+            finding('verify.directory', 'failed', { part: 'base', name: 'PS4', difference: 5 }),
+            finding('verify.moduleDigest', 'notice', { part: 'update', name: 'libc.prx' })
+        ])
+    }) });
+    await submitChecklist(view);
+    assert.match(view.id('setup-status').textContent, /PS4 is incomplete \(5 B missing\)/);
+    assert.match(view.id('setup-verify-findings').textContent, /checksum of libc\.prx differs/);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="settings"]').classList.contains('todo'), true);
+    assert.equal(view.id('setup-retry').hidden, false);
 });
 
 test('check inputs: a failed finding is the headline and Unpack never starts', async () => {
-    const view = open({
-        'setup-show23': { busy: true },
-        'get-setup-inputs': { busy: false, stage: 'check', findings: [
-            { id: 'base.complete', state: 'failed', values: { reason: 'truncated' } },
-            { id: 'install.local', state: 'passed', values: {} }
-        ] }
-    });
+    const view = open({ 'get-setup-inputs': setupResult({ check: stage('failed', [
+        finding('base.complete', 'failed', { reason: 'truncated' }), finding('install.local', 'passed')
+    ]) }) });
     await submitChecklist(view);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('failed'), true);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="unpack"]').classList.contains('todo'), true);
@@ -220,20 +263,61 @@ test('check inputs: a failed finding is the headline and Unpack never starts', a
     assert.equal(view.document.activeElement, view.id('setup-retry'));
 });
 
-test('check inputs: the worker keeps the running stage visible until its result arrives', async () => {
-    let ready = false;
-    const view = open({
-        'setup-show23': { busy: true },
-        'get-setup-inputs': () => ready ? { busy: false, stage: 'unpack', findings: [
-            { id: 'install.space', state: 'passed', values: { needed: 2 ** 32, available: 2 ** 34, drive: 'Q:' } }
-        ] } : { busy: true }
-    });
+test('setup: polling switches the running stage from Check inputs to Verify', async () => {
+    let reply = { busy: true };
+    const view = open({ 'get-setup-inputs': () => reply });
     await submitChecklist(view);
     assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('current'), true);
     assert.equal(view.id('setup-pending').hidden, false);
     assert.equal(view.id('setup-checklist').hidden, true);
-    ready = true;
+    reply = { busy: true, stages: {
+        check: stage('done', [finding('install.space', 'passed', { kind: 'in_place', needed: 2 ** 31, available: 2 ** 34, drive: 'Q:' })]),
+        unpack: stage('not_needed', [finding('unpack.inPlace', 'passed')]), verify: stage('running')
+    } };
+    await view.clock.advance(160);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="verify"]').classList.contains('current'), true);
+    assert.match(view.id('setup-findings').textContent, /game stays where it is.*2 GiB.*16 GiB/);
+    reply = setupResult({ ...reply.stages, verify: stage('done'), settings: stage('done'), finish: stage('done') });
     await view.clock.advance(160);
     assert.equal(view.id('setup-pending').hidden, true);
-    assert.match(view.id('setup-findings').textContent, /4 GiB.*16 GiB/);
+});
+
+test('show23: Game set up with no runtime shows the saved version and secondary Set up again', async () => {
+    const view = open({ 'get-show23': { ready: false, setUp: true, version: '1.21', updated: true } });
+    await view.clock.advance(0);
+    assert.equal(view.id('game-state').textContent, 'Game set up');
+    assert.match(view.id('game-meta').textContent, /1\.21/);
+    assert.match(view.id('game-source-notice').textContent, /emulator and local server are not installed/i);
+    assert.equal(view.id('setup-open-label').textContent, 'Set up again');
+    assert.equal(view.id('setup-open').classList.contains('btn-secondary'), true);
+    assert.equal(view.id('play').disabled, true);
+});
+
+test('show23: missing recorded game folder shows its path and primary Set up again', async () => {
+    const sourcePath = 'Q:\\Fixture\\Missing';
+    const view = open({ 'get-show23': { ready: false, gameMissing: true, sourcePath } });
+    await view.clock.advance(0);
+    assert.equal(view.id('game-state').textContent, 'Game folder not found');
+    assert.ok(view.id('game-source-notice').textContent.includes(sourcePath));
+    assert.equal(view.id('setup-open-label').textContent, 'Set up again');
+    assert.equal(view.id('setup-open').classList.contains('btn-primary'), true);
+    assert.equal(view.id('play').disabled, true);
+});
+
+test('show23: Verify Files displays game findings alongside the runtime message', async () => {
+    const view = open({
+        'get-show23': { ready: false, setUp: true, version: '1.00' },
+        'verify-show23': true,
+        'get-verify': { busy: false, message: 'No active runtime to verify.', findings: [
+            finding('verify.executable', 'passed', { part: 'base' }),
+            finding('verify.directory', 'notice', { part: 'base', name: 'FRONTEND', difference: 8 })
+        ] }
+    });
+    await view.clock.advance(0);
+    view.id('verify').click();
+    await view.clock.advance(0);
+    assert.equal(view.id('game-verification').hidden, false);
+    assert.match(view.id('game-status').textContent, /No active runtime/);
+    assert.match(view.id('game-verify-findings').textContent, /executable checksum matches/);
+    assert.match(view.id('game-verify-findings').textContent, /FRONTEND has extra files/);
 });

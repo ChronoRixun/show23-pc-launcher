@@ -192,8 +192,10 @@ files {"./src/tests/**.hpp", "./src/tests/**.cpp",
        "./src/launcher/updater/release_resolver.cpp", "./src/launcher/updater/part_manifest.cpp",
        "./src/launcher/support/redact.cpp", "./src/launcher/support/report_rules.cpp",
        "./src/launcher/show23/sfo.cpp", "./src/launcher/show23/package_header.cpp",
-       "./src/launcher/show23/input_paths.cpp", "./src/launcher/show23/input_checks.cpp"}
-includedirs {"./src/tests", "./src/launcher", "./src/common", path.join(dependencies.basePath, "rapidjson/include")}
+       "./src/launcher/show23/input_paths.cpp", "./src/launcher/show23/input_checks.cpp",
+       "./src/launcher/show23/setup.cpp", "./src/launcher/show23/setup_verification.cpp",
+       "./src/launcher/show23/game_record.cpp", "./src/launcher/show23/setup_run.cpp"}
+includedirs {"./src/common", "./src/tests", "./src/launcher", path.join(dependencies.basePath, "rapidjson/include")}
 defines {"RAPIDJSON_HAS_STDSTRING", "NOMINMAX"}
 links {"common"}
 libtomcrypt.import()

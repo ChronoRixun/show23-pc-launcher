@@ -38,8 +38,11 @@ namespace show23::input_paths
         bool present{};
         bool directory{};
         std::uint64_t length{};
+        DWORD links{};
     };
 
+    std::wstring extended(const fs::path& path);
+    std::optional<std::string> sha256(const location& file);
     bool fixed_drive(const fs::path& path);
     location inspect(const fs::path& path, bool allow_missing = false, bool read_file = false);
     bool contains(const fs::path& directory, const fs::path& path);
