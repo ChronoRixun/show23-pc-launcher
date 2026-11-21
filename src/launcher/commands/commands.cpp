@@ -47,6 +47,46 @@ namespace commands
             std::string message;
         };
         task verify;
+        bool setup_busy{};
+        std::optional<show23::checked_inputs> setup_result;
+
+        void write_setup(rapidjson::Document& response, const show23::checked_inputs& checked)
+        {
+            response.SetObject();
+            auto& allocator = response.GetAllocator();
+            response.AddMember("busy", false, allocator);
+            response.AddMember("stage", rapidjson::StringRef(checked.passed() ? "unpack" : "check"), allocator);
+            response.AddMember("baseVersion", json(checked.base_version, allocator), allocator);
+            response.AddMember("hasUpdate", checked.has_update, allocator);
+            response.AddMember("updateVersion", json(checked.update_version, allocator), allocator);
+            if (checked.needed_bytes) response.AddMember("neededBytes", *checked.needed_bytes, allocator);
+            if (checked.available_bytes) response.AddMember("availableBytes", *checked.available_bytes, allocator);
+            rapidjson::Value findings(rapidjson::kArrayType);
+            for (const auto& finding : checked.findings)
+            {
+                rapidjson::Value row(rapidjson::kObjectType);
+                row.AddMember("id", json(finding.id, allocator), allocator);
+                row.AddMember("state", rapidjson::StringRef(show23::state_name(finding.state)), allocator);
+                rapidjson::Value values(rapidjson::kObjectType);
+                for (const auto& [key, value] : finding.values)
+                {
+                    if (const auto number = std::get_if<std::uint64_t>(&value))
+                        values.AddMember(json(key, allocator), rapidjson::Value(*number), allocator);
+                    else
+                        values.AddMember(json(key, allocator), json(std::get<std::string>(value), allocator), allocator);
+                }
+                row.AddMember("values", values, allocator);
+                findings.PushBack(row, allocator);
+            }
+            response.AddMember("findings", findings, allocator);
+        }
+
+        show23::checked_inputs setup_failure(const char* id)
+        {
+            show23::checked_inputs checked;
+            checked.findings.push_back({id, show23::finding_state::failed, {}});
+            return checked;
+        }
         struct update_state
         {
             std::mutex mutex;
@@ -271,7 +311,7 @@ namespace commands
                 const auto kind = string(value, "kind");
                 if (kind != "package" && kind != "folder")
                 {
-                    result(response, "Choose a base game package or folder.");
+                    write_setup(response, setup_failure("check.selection"));
                     return;
                 }
                 const auto update = string(value, "update");
@@ -281,25 +321,47 @@ namespace commands
                     update.empty() ? std::nullopt : std::optional(utils::string::utf8_to_path(update)),
                     utils::string::utf8_to_path(string(value, "install"))
                 };
+                std::lock_guard lock(verify.mutex);
+                if (verify.busy || setup_busy)
                 {
-                    // A destination change cannot invalidate the inputs of a running verification.
-                    std::lock_guard lock(verify.mutex);
-                    if (verify.busy)
-                    {
-                        result(response, "Wait for Verify Files to finish.");
-                        return;
-                    }
-                    verify.message.clear();
+                    write_setup(response, setup_failure("check.busy"));
+                    return;
                 }
-                const auto state = show23::begin_setup(request);
-                result(response, state.message);
-                auto& a = response.GetAllocator();
-                response.AddMember("pending", state.state == show23::status::not_implemented, a);
-                response.AddMember("stage", "check", a);
-                response.AddMember("percent", 0, a);
-                rapidjson::Value log(rapidjson::kArrayType);
-                log.PushBack(json(state.message, a), a);
-                response.AddMember("log", log, a);
+                setup_result.reset();
+                setup_busy = true;
+                verify.message.clear();
+                try
+                {
+                    std::thread([request]
+                    {
+                        show23::checked_inputs checked;
+                        try { checked = show23::begin_setup(request); }
+                        catch (...) { checked = setup_failure("check.internal"); }
+
+                        std::lock_guard completed(verify.mutex);
+                        setup_result = std::move(checked);
+                        setup_busy = false;
+                    }).detach();
+                    response.SetObject();
+                    response.AddMember("busy", true, response.GetAllocator());
+                }
+                catch (const std::exception&)
+                {
+                    setup_busy = false;
+                    write_setup(response, setup_failure("check.internal"));
+                }
+            });
+
+            ui.add_command("get-setup-inputs", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                if (setup_result)
+                {
+                    write_setup(response, *setup_result);
+                    return;
+                }
+                response.SetObject();
+                response.AddMember("busy", setup_busy, response.GetAllocator());
             });
 
             ui.add_command("play-show23", [](const auto&, rapidjson::Document& response)
@@ -325,7 +387,7 @@ namespace commands
             {
                 std::lock_guard lock(verify.mutex);
                 response.SetBool(false);
-                if (verify.busy) return;
+                if (verify.busy || setup_busy) return;
                 verify.busy = true;
                 verify.message.clear();
                 try

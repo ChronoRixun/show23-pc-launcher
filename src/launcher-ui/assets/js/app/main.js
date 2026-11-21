@@ -9,7 +9,7 @@
     const pages = { show23: 'show23-page', setup: 'setup', mods: 'mods-panel', settings: 'settings-page', support: 'support-page' };
     const state = {
         page: 'show23', settings: {}, game: {}, parts: {}, mods: null,
-        sourceKind: 'package', setupBusy: false, location: 'installed',
+        sourceKind: 'package', setupBusy: false, setupDetails: '', location: 'installed',
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
 
@@ -154,33 +154,122 @@
         return run('browse-file', { title: t(title), filters: [{ name: t('setup.packageFilter'), pattern: '*.pkg' }] });
     }
 
+    function spaceText(bytes) {
+        const gib = bytes / (1024 ** 3);
+        const format = new Intl.NumberFormat(window.LauncherI18n.getLanguage(), { maximumFractionDigits: 2 });
+        return gib >= 1 ? format.format(gib) + ' GiB' : format.format(gib * 1024) + ' MiB';
+    }
+
+    function findingText(row) {
+        const [scope, field] = row.id.split('.');
+        const values = row.values || {};
+        const ok = row.state === 'passed';
+        const reason = values.reason;
+        const source = t(scope === 'update' ? 'checks.updateSource' : 'checks.baseSource');
+        const details = { ...values, source };
+        if (scope === 'check') return t('checks.' + field);
+        if (scope === 'install') {
+            switch (field) {
+                case 'local': return t(ok ? 'checks.local' : 'checks.notLocal');
+                case 'overlap': return t(ok ? 'checks.separate' : reason === 'settings' ? 'checks.settingsOverlap' : 'checks.overlap');
+                case 'writable':
+                    if (row.state === 'later') return t('checks.writableLater');
+                    return t(ok ? 'checks.writable' : reason === 'link' ? 'checks.destinationLink'
+                        : reason === 'directory' ? 'checks.destinationDirectory' : 'checks.unwritable');
+                case 'space':
+                    if (reason === 'size') return t('checks.estimateFailed');
+                    if (reason === 'unreadable') return t('checks.spaceUnknown');
+                    return t(ok ? 'checks.spaceOk' : 'checks.spaceLow', {
+                        needed: spaceText(values.needed), available: spaceText(values.available), drive: values.drive
+                    });
+            }
+        }
+        switch (field) {
+            case 'kind':
+                if (ok) return t(values.kind === 'folder' ? 'checks.folder' : 'checks.package', details);
+                return t({
+                    missing: 'checks.missingSource', link: 'checks.sourceLink',
+                    expectedFolder: 'checks.expectedFolder', expectedFile: 'checks.expectedPackage'
+                }[reason] || 'checks.unreadableSource', details);
+            case 'complete':
+                if (ok) return t(values.kind === 'folder' ? 'checks.folderMeasured' : 'checks.fileComplete', details);
+                return t({
+                    truncated: 'checks.truncated', magic: 'checks.badMagic', folder: 'checks.badFolder',
+                    unreadable: 'checks.unreadableSource'
+                }[reason] || 'checks.badLayout', details);
+            case 'metadata':
+                if (ok) return t('checks.metadata', details);
+                return t({
+                    missing: 'checks.metadataMissing', encrypted: 'checks.metadataEncrypted', link: 'checks.metadataLink'
+                }[reason] || 'checks.metadataInvalid', details);
+            case 'type': return t(ok ? 'checks.packageType' : 'checks.wrongPackageType', details);
+            case 'content': return t(ok ? 'checks.content' : 'checks.wrongContent', details);
+            case 'title': return t(ok ? 'checks.title' : 'checks.wrongTitle', details);
+            case 'category': return t(ok ? (scope === 'base' ? 'checks.baseCategory' : 'checks.updateCategory')
+                : (scope === 'base' ? 'checks.wrongBaseCategory' : 'checks.wrongUpdateCategory'));
+            case 'version': return t(ok ? (scope === 'base' ? 'checks.baseVersion' : 'checks.updateVersion') : 'checks.wrongVersion', details);
+            case 'executable':
+                if (row.state === 'later') return t('checks.executableLater', details);
+                if (ok) return t('checks.executable', details);
+                return t({
+                    digest: 'checks.unknownExecutable', missing: 'checks.missingExecutable',
+                    link: 'checks.executableLink'
+                }[reason] || 'checks.unreadableExecutable', details);
+            case 'matches': return t(ok ? 'checks.matches' : 'checks.different');
+            case 'offline': return t('checks.offlineUpdate');
+            default: return t('checks.internal');
+        }
+    }
+
+    function showChecklist(rows) {
+        const list = $('setup-findings');
+        list.textContent = '';
+        $('setup-checklist').hidden = !rows.length;
+        const symbols = { passed: 'check', failed: 'alert', notice: 'info', later: 'right' };
+        return rows.map(row => {
+            const text = findingText(row);
+            const state = Object.hasOwn(symbols, row.state) ? row.state : 'failed';
+            const description = t('checks.' + state);
+            const item = make('li', 'check-finding ' + state);
+            item.innerHTML = '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-' + symbols[state] + '"></use></svg>';
+            item.appendChild(make('span', 'check-state', description));
+            item.appendChild(make('span', 'check-text', text));
+            list.appendChild(item);
+            return description + ' — ' + text;
+        });
+    }
+
     function showStage(reply) {
         const stopped = reply !== null;
+        const unpackStop = reply?.stage === 'unpack';
         $('setup-picker').hidden = true;
         $('setup-progress').hidden = false;
         $('setup-title').textContent = t(stopped ? 'setup.stopped' : 'setup.settingUp');
         $('setup-lede').textContent = '';
-        const activeStage = reply?.stage || 'check';
         for (const node of $('setup-stages').querySelectorAll('[data-stage]')) {
-            const active = node.dataset.stage === activeStage;
-            node.className = 'stage ' + (active ? (stopped ? 'failed' : 'current') : 'todo');
-            node.querySelector('.stage-sub').textContent = t(active
-                ? (stopped ? 'setup.failed' : 'setup.checkingInputs')
-                : (stopped ? 'setup.notStarted' : 'setup.waiting'));
+            const stage = node.dataset.stage;
+            const kind = stage === 'check' ? (unpackStop ? 'done' : stopped ? 'failed' : 'current')
+                : stage === 'unpack' && unpackStop ? 'stopped' : 'todo';
+            node.className = 'stage ' + kind;
+            node.querySelector('.glyph').setAttribute('d', kind === 'done' ? 'm10 16 4 4 8-8' : 'M16 10v7m0 4v.1');
+            node.querySelector('.stage-sub').textContent = t({
+                done: 'setup.done', failed: 'setup.failed', current: 'setup.checkingInputs', stopped: 'checks.notImplemented',
+                todo: stopped ? 'setup.notStarted' : 'setup.waiting'
+            }[kind]);
         }
         $('setup-pending').hidden = stopped;
-        if (typeof reply?.percent === 'number') {
-            $('setup-pending').setAttribute('aria-valuenow', String(reply.percent));
-        } else {
-            $('setup-pending').removeAttribute('aria-valuenow');
-        }
         $('setup-alert').hidden = !stopped;
+        $('setup-alert').classList.toggle('is-stopped', unpackStop);
+        $('setup-stop-icon').setAttribute('href', unpackStop ? '#icon-info' : '#icon-alert');
         $('setup-failure-actions').hidden = !stopped;
-        const message = reply?.pending ? t('game.setupPending') : reply?.message;
-        $('setup-status').textContent = message || '';
-        const lines = reply?.pending ? [message] : (reply?.log || (message ? [message] : []));
-        status('setup-log', lines.slice(-4).join('\n'));
-        if (stopped && state.page === 'setup') $('setup-retry').focus();
+        $('setup-retry').hidden = unpackStop;
+
+        const rows = reply?.findings || [];
+        const firstFailure = rows.find(row => row.state === 'failed');
+        const message = unpackStop ? t('setup.unpackPending') : firstFailure ? findingText(firstFailure) : '';
+        $('setup-status').textContent = message;
+        state.setupDetails = [message, ...showChecklist(rows)].filter(Boolean).join('\n');
+        if (stopped && state.page === 'setup') $(unpackStop ? 'setup-edit' : 'setup-retry').focus();
     }
 
     async function submitSetup() {
@@ -188,15 +277,19 @@
         state.setupBusy = true;
         try {
             showStage(null);
-            const reply = await run('setup-show23', {
+            let reply = await run('setup-show23', {
                 kind: state.sourceKind, base: $('base-path').value,
                 update: $('update-path').value, install: $('install-path').value
             });
-            showStage(reply?.message || reply?.pending ? reply : { message: t('support.error') });
+            while (reply?.busy) {
+                reply = await run('get-setup-inputs');
+                if (reply?.busy) await sleep(160);
+            }
+            showStage(reply?.findings?.length ? reply : { findings: [{ id: 'check.internal', state: 'failed' }] });
             await gameState();
         } catch (error) {
             console.error(error);
-            showStage({ message: t('support.error') });
+            showStage({ findings: [{ id: 'check.internal', state: 'failed' }] });
         } finally {
             state.setupBusy = false;
             setupInputsChanged();
@@ -416,7 +509,7 @@
         bind('setup-edit', 'click', () => showPicker('base-choose'));
         bind('setup-retry', 'click', submitSetup);
         bind('setup-continue', 'click', submitSetup);
-        bind('copy-setup', 'click', () => copy($('setup-log').textContent, 'setup.detailsCopied'));
+        bind('copy-setup', 'click', () => copy(state.setupDetails, 'setup.detailsCopied'));
 
         for (const kind of ['package', 'folder']) {
             bind('base-' + kind, 'click', () => {
@@ -433,6 +526,11 @@
         });
         bind('update-package', 'click', async () => {
             const path = await pickPackage('setup.pickUpdate');
+            if (path) $('update-path').value = path;
+            setupInputsChanged();
+        });
+        bind('update-folder', 'click', async () => {
+            const path = await run('browse-folder');
             if (path) $('update-path').value = path;
             setupInputsChanged();
         });

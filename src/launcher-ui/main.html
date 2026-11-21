@@ -141,8 +141,8 @@
                                 <p id="base-hint" class="hint" role="status" hidden></p>
                             </div>
                             <div class="field">
-                                <label class="field-label" for="update-path"><span class="step-num" aria-hidden="true">2</span><span data-i18n="setup.update">1.21 update package</span><span class="opt" data-i18n="setup.optional">Optional</span></label>
-                                <div class="row"><input id="update-path" class="path" type="text" data-i18n-placeholder="setup.noUpdate" placeholder="No update package chosen" readonly><button type="button" class="btn btn-secondary" id="update-package"><span data-i18n="setup.pickUpdate">Choose update package</span></button><button type="button" class="btn btn-ghost" id="update-clear" disabled><span data-i18n="common.clear">Clear</span></button></div>
+                                <label class="field-label" for="update-path"><span class="step-num" aria-hidden="true">2</span><span data-i18n="setup.update">1.21 update</span><span class="opt" data-i18n="setup.optional">Optional</span></label>
+                                <div class="row update-choice"><input id="update-path" class="path" type="text" data-i18n-placeholder="setup.noUpdate" placeholder="No update chosen" readonly><button type="button" class="btn btn-secondary" id="update-package"><span data-i18n="setup.pickUpdate">Choose update package</span></button><button type="button" class="btn btn-secondary" id="update-folder"><span data-i18n="setup.pickUpdateFolder">Choose folder</span></button><button type="button" class="btn btn-ghost" id="update-clear" disabled><span data-i18n="common.clear">Clear</span></button></div>
                             </div>
                             <div class="field">
                                 <label class="field-label" for="install-path"><span class="step-num" aria-hidden="true">3</span><span data-i18n="setup.install">Install folder</span></label>
@@ -185,8 +185,11 @@
                             </li>
                             </ol>
                             <div class="progress stage-progress" id="setup-pending" role="progressbar" aria-busy="true" aria-labelledby="setup-title"><i></i></div>
-                            <div class="alert" id="setup-alert" role="alert" hidden><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-alert"></use></svg><div><h3 id="setup-status"></h3><p data-i18n="setup.stopNote">No game files were unpacked or changed.</p></div></div>
-                            <pre class="log" id="setup-log" hidden></pre>
+                            <div class="alert" id="setup-alert" role="alert" hidden><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use id="setup-stop-icon" href="#icon-alert"></use></svg><div><h3 id="setup-status"></h3><p data-i18n="setup.stopNote">No game files were unpacked or changed.</p></div></div>
+                            <section id="setup-checklist" class="setup-checklist" aria-labelledby="setup-checklist-title" hidden>
+                                <h2 class="section-h" id="setup-checklist-title" data-i18n="checks.heading">Input checklist</h2>
+                                <ul id="setup-findings"></ul>
+                            </section>
                         </div>
                         <footer class="setup-footer spread" id="setup-failure-actions" hidden>
                             <button type="button" class="btn btn-ghost" id="copy-setup"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-copy"></use></svg><span data-i18n="setup.copyDetails">Copy details</span></button>

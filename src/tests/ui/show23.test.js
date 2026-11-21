@@ -9,7 +9,10 @@ function open(overrides = {}) {
         'get-launcher-update': { enabled: false },
         'browse-folder': 'Q:\\Fixture\\Destination',
         'browse-file': 'Q:\\Fixture\\Source.pkg',
-        'setup-show23': { pending: true },
+        'setup-show23': { busy: true },
+        'get-setup-inputs': { busy: false, stage: 'check', findings: [
+            { id: 'base.complete', state: 'failed', values: { reason: 'truncated' } }
+        ] },
         ...overrides
     };
     const view = page({
@@ -43,7 +46,7 @@ test('show23: setup captures the chosen inputs and stops before enabling Play', 
     assert.equal(call.payload.base, 'Q:\\Fixture\\Source.pkg');
     assert.equal(call.payload.update, '');
     assert.equal(call.payload.install, 'Q:\\Fixture\\Destination');
-    assert.equal(id('setup-status').textContent, 'Setup is not implemented in this version.');
+    assert.match(id('setup-status').textContent, /incomplete|still downloading/i);
     assert.equal(id('setup-title').textContent, 'Set up stopped');
     assert.equal(id('setup-stages').querySelector('[data-stage="check"]').classList.contains('failed'), true);
     assert.equal(id('setup-stages').querySelectorAll('.todo').length, 4);
@@ -172,4 +175,65 @@ test('night game: an available empty Mods folder shows its three actions', async
     const empty = view.id('show23-mods-panel').querySelector('.empty');
     assert.equal(empty.querySelector('h2').textContent, 'No mods yet');
     assert.equal(empty.querySelectorAll('button').length, 3);
+});
+
+async function submitChecklist(view) {
+    await view.clock.advance(0);
+    view.id('setup-open').click();
+    view.id('base-choose').click();
+    view.id('install-folder').click();
+    await view.clock.advance(0);
+    view.id('setup-continue').click();
+    await view.clock.advance(0);
+}
+
+test('check inputs: a pass lists the findings and stops at Unpack', async () => {
+    const view = open({
+        'setup-show23': { busy: true },
+        'get-setup-inputs': { busy: false, stage: 'unpack', findings: [
+            { id: 'base.version', state: 'passed', values: { version: '1.00' } },
+            { id: 'base.executable', state: 'later', values: {} },
+            { id: 'update.offline', state: 'notice', values: {} }
+        ] }
+    });
+    await submitChecklist(view);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('done'), true);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="unpack"]').classList.contains('stopped'), true);
+    assert.match(view.id('setup-status').textContent, /Unpack is not implemented/i);
+    assert.equal(view.id('setup-findings').children.length, 3);
+    assert.match(view.id('setup-findings').textContent, /1\.00/);
+});
+
+test('check inputs: a failed finding is the headline and Unpack never starts', async () => {
+    const view = open({
+        'setup-show23': { busy: true },
+        'get-setup-inputs': { busy: false, stage: 'check', findings: [
+            { id: 'base.complete', state: 'failed', values: { reason: 'truncated' } },
+            { id: 'install.local', state: 'passed', values: {} }
+        ] }
+    });
+    await submitChecklist(view);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('failed'), true);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="unpack"]').classList.contains('todo'), true);
+    assert.match(view.id('setup-status').textContent, /incomplete|still downloading/i);
+    assert.equal(view.id('setup-findings').children.length, 2);
+    assert.equal(view.document.activeElement, view.id('setup-retry'));
+});
+
+test('check inputs: the worker keeps the running stage visible until its result arrives', async () => {
+    let ready = false;
+    const view = open({
+        'setup-show23': { busy: true },
+        'get-setup-inputs': () => ready ? { busy: false, stage: 'unpack', findings: [
+            { id: 'install.space', state: 'passed', values: { needed: 2 ** 32, available: 2 ** 34, drive: 'Q:' } }
+        ] } : { busy: true }
+    });
+    await submitChecklist(view);
+    assert.equal(view.id('setup-stages').querySelector('[data-stage="check"]').classList.contains('current'), true);
+    assert.equal(view.id('setup-pending').hidden, false);
+    assert.equal(view.id('setup-checklist').hidden, true);
+    ready = true;
+    await view.clock.advance(160);
+    assert.equal(view.id('setup-pending').hidden, true);
+    assert.match(view.id('setup-findings').textContent, /4 GiB.*16 GiB/);
 });

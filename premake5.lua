@@ -190,9 +190,14 @@ language "C++"
 files {"./src/tests/**.hpp", "./src/tests/**.cpp",
        "./src/launcher/updater/swap_retry.cpp", "./src/launcher/updater/release_channel.cpp",
        "./src/launcher/updater/release_resolver.cpp", "./src/launcher/updater/part_manifest.cpp",
-       "./src/launcher/support/redact.cpp", "./src/launcher/support/report_rules.cpp"}
-includedirs {"./src/tests", "./src/launcher", path.join(dependencies.basePath, "rapidjson/include")}
-defines {"RAPIDJSON_HAS_STDSTRING"}
+       "./src/launcher/support/redact.cpp", "./src/launcher/support/report_rules.cpp",
+       "./src/launcher/show23/sfo.cpp", "./src/launcher/show23/package_header.cpp",
+       "./src/launcher/show23/input_paths.cpp", "./src/launcher/show23/input_checks.cpp"}
+includedirs {"./src/tests", "./src/launcher", "./src/common", path.join(dependencies.basePath, "rapidjson/include")}
+defines {"RAPIDJSON_HAS_STDSTRING", "NOMINMAX"}
+links {"common"}
+libtomcrypt.import()
+libtommath.import()
 
 if _ACTION == "vs2022" then
     group "Dependencies"
