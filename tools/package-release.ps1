@@ -58,7 +58,7 @@ $Server = (Get-Plain $Server $true).FullName
 if (!$ServerLicense) { $ServerLicense = Join-Path (Split-Path -Parent $Server) 'LICENSE' }
 $ServerLicense = (Get-Plain $ServerLicense $false).FullName
 foreach ($required in @($launcher, (Join-Path $browser 'libcef.dll'), (Join-Path $ui 'main.html'),
-    (Join-Path $Server 'olserver.py'), (Join-Path $Server 'roster_decode.py'), (Join-Path $Server 'tables\ol-messages.csv'))) {
+    (Join-Path $Server 'olserver.py'), (Join-Path $Server 'roster_decode.py'), (Join-Path $Server 'card_import.py'), (Join-Path $Server 'tables\ol-messages.csv'))) {
     Get-Plain $required $false | Out-Null
 }
 Get-Plain (Join-Path $Server 'replies') $true | Out-Null
@@ -116,7 +116,7 @@ try {
     Copy-Tree $browser (Join-Path $app 'data\cef\release')
     Copy-Tree $ui (Join-Path $app 'data\launcher-ui')
     Copy-Item -LiteralPath $Emulator -Destination (Join-Path $runtime 'emulator\shadPS4.exe')
-    foreach ($relative in 'olserver.py', 'roster_decode.py', 'tables\ol-messages.csv') {
+    foreach ($relative in 'olserver.py', 'roster_decode.py', 'card_import.py', 'tables\ol-messages.csv') {
         Copy-Item -LiteralPath (Join-Path $Server $relative) -Destination (Join-Path $runtime "server\$relative")
     }
     Copy-Tree (Join-Path $Server 'replies') (Join-Path $runtime 'server\replies') '*.xml'
