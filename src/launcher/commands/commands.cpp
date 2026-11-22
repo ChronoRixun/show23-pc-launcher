@@ -34,6 +34,13 @@ namespace commands
             return {field->value.GetString(), field->value.GetStringLength()};
         }
 
+        show23::resolution saved_resolution()
+        {
+            const auto id = utils::properties::load(property_keys::RESOLUTION).value_or("");
+            const auto* choice = show23::find_resolution(id);
+            return choice ? *choice : show23::default_resolution;
+        }
+
         rapidjson::Value json(const std::string& text, rapidjson::Document::AllocatorType& allocator)
         {
             return rapidjson::Value(text.data(), static_cast<rapidjson::SizeType>(text.size()), allocator);
@@ -342,6 +349,7 @@ namespace commands
                 const auto name = show23::normalize_player_name(utils::properties::load(property_keys::PLAYER_NAME).value_or(""));
                 response.AddMember("playerName", json(name.value_or(""), a), a);
                 response.AddMember("cardsOffered", utils::properties::load(property_keys::CARDS_OFFERED) == "true", a);
+                response.AddMember("resolution", json(std::string(saved_resolution().id), a), a);
                 response.AddMember("fullscreen", utils::properties::load(property_keys::FULLSCREEN) == "true", a);
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
@@ -369,6 +377,12 @@ namespace commands
                 }
                 else if (key == "cardsOffered" && value == "true")
                     utils::properties::store(property_keys::CARDS_OFFERED, value);
+                else if (key == "resolution" && show23::find_resolution(value))
+                {
+                    utils::properties::store(property_keys::RESOLUTION, value);
+                    response.SetBool(utils::properties::load(property_keys::RESOLUTION) == value);
+                    return;
+                }
                 else if (key == "fullscreen" && (value == "true" || value == "false"))
                     utils::properties::store(property_keys::FULLSCREEN, value);
                 else if (key == "offline" && (value == "true" || value == "false"))
@@ -633,7 +647,8 @@ namespace commands
                                     const auto emulator_folder = parts::component_folder(runtime, parts::id::emulator);
                                     const show23::play_request request{*install, game.record->base.path,
                                         server.python, server.script,
-                                        emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true", name};
+                                        emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true", name,
+                                        saved_resolution()};
                                     show23::play_options options;
                                     options.stop = [] { return play_stop.load(); };
                                     options.phase = [](auto phase)

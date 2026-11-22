@@ -173,6 +173,14 @@ namespace show23
             if (!available(port)) return {"port", port};
         if (stopped()) return {"stopped"};
 
+        try
+        {
+            const auto applied = write_resolution(profile.path, request.display_resolution);
+            if (applied == resolution_result::malformed) return {"resolutionMalformed"};
+            if (applied != resolution_result::updated) return {"resolutionUnavailable"};
+        }
+        catch (...) { return {"resolutionUnavailable"}; }
+
         SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
         const handle input(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                       &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));

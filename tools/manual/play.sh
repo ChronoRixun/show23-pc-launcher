@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 if [ "$#" -lt 2 ]; then
-    echo 'Usage: sh play.sh <install> <emulator> [--fullscreen] [--no-update-art]' >&2
+    echo 'Usage: sh play.sh <install> <emulator> [--fullscreen] [--no-update-art] [--resolution 720|1080] [--name <player name>]' >&2
     exit 2
 fi
 bundle="$(CDPATH= cd -- "$(dirname -- "$0")/../show23-pc" && pwd)"

@@ -309,6 +309,16 @@
                                 <label for="fullscreen" data-i18n="play.fullscreen">Fullscreen</label>
                                 <input class="switch" type="checkbox" id="fullscreen" role="switch">
                             </div>
+                            <div class="set-row resolution-row">
+                                <div>
+                                    <span class="set-name" id="resolution-label" data-i18n="resolution.label">Resolution</span>
+                                    <span class="set-help" id="resolution-help" data-i18n="resolution.help">Higher looks sharper; the game's frame rate is mostly limited by the processor.</span>
+                                </div>
+                                <div class="seg toggle-group" id="resolution" role="radiogroup" aria-labelledby="resolution-label" aria-describedby="resolution-help">
+                                    <button type="button" class="toggle-btn" id="resolution-720p" role="radio" aria-checked="false" tabindex="-1" data-choice="720p"><span data-i18n="resolution.720p">720p (1280×720)</span></button>
+                                    <button type="button" class="toggle-btn on" id="resolution-1080p" role="radio" aria-checked="true" tabindex="0" data-choice="1080p"><span data-i18n="resolution.1080p">1080p (1920×1080)</span></button>
+                                </div>
+                            </div>
                             <div class="set-row" id="offline-status" hidden><span class="small faint" data-i18n="settings.offlineActive">Offline mode is active.</span><button type="button" class="btn btn-ghost btn-sm" id="restart-online"><span data-i18n="settings.restartOnline">Restart online</span></button></div>
                             <div class="set-row">
                                 <label for="language" data-i18n="settings.language">Language</label>

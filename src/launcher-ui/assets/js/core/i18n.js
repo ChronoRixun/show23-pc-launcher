@@ -1,6 +1,12 @@
 (function () {
     const translations = {
         "en": {
+            "resolution": {
+                "label": "Resolution",
+                "help": "Higher looks sharper; the game's frame rate is mostly limited by the processor.",
+                "720p": "720p (1280×720)",
+                "1080p": "1080p (1920×1080)"
+            },
             "cards": {
                 "serverRunning": "Stop the local server and free ports 10000 and 10080 before importing.",
                 "title": "Cards",
@@ -38,6 +44,8 @@
                 "saveFailed": "The name could not be saved in launcher settings. You can try saving it again in Settings."
             },
             "play": {
+                "resolutionMalformed": "The GPU settings in config.json could not be read safely. The file was left unchanged. Fix it and press Play again.",
+                "resolutionUnavailable": "Could not apply the resolution to config.json. Check that the profile folder is writable, then press Play again.",
                 "importOccupied": "Close the active card import or game session before starting Play.",
                 "stop": "Stop",
                 "fullscreen": "Fullscreen",
@@ -478,6 +486,12 @@
             }
         },
         "fr": {
+            "resolution": {
+                "label": "Résolution",
+                "help": "Une résolution plus élevée donne une image plus nette. La fréquence d’images du jeu dépend surtout du processeur.",
+                "720p": "720p (1280×720)",
+                "1080p": "1080p (1920×1080)"
+            },
             "cards": {
                 "serverRunning": "Arrêtez le serveur local et libérez les ports 10000 et 10080 avant l’importation.",
                 "title": "Cartes",
@@ -515,6 +529,8 @@
                 "saveFailed": "Le nom n’a pas pu être enregistré dans les paramètres du lanceur. Vous pouvez réessayer dans les paramètres."
             },
             "play": {
+                "resolutionMalformed": "Impossible de lire les réglages graphiques de config.json en toute sécurité. Le fichier est resté intact. Corrigez-le, puis relancez le jeu.",
+                "resolutionUnavailable": "Impossible d’appliquer la résolution dans config.json. Vérifiez que le dossier du profil est accessible en écriture, puis relancez le jeu.",
                 "importOccupied": "Fermez l’importation ou la partie en cours avant de jouer.",
                 "stop": "Arrêter",
                 "fullscreen": "Plein écran",
@@ -949,6 +965,12 @@
             }
         },
         "es": {
+            "resolution": {
+                "label": "Resolución",
+                "help": "Una resolución más alta da una imagen más nítida. La frecuencia de fotogramas del juego depende sobre todo del procesador.",
+                "720p": "720p (1280×720)",
+                "1080p": "1080p (1920×1080)"
+            },
             "cards": {
                 "serverRunning": "Detén el servidor local y libera los puertos 10000 y 10080 antes de importar.",
                 "title": "Cartas",
@@ -986,6 +1008,8 @@
                 "saveFailed": "No se pudo guardar el nombre en la configuración del iniciador. Puedes volver a intentarlo en Configuración."
             },
             "play": {
+                "resolutionMalformed": "No se pudieron leer con seguridad los ajustes gráficos de config.json. El archivo no se modificó. Corrígelo y pulsa Jugar de nuevo.",
+                "resolutionUnavailable": "No se pudo aplicar la resolución en config.json. Comprueba que puedas escribir en la carpeta del perfil y vuelve a pulsar Jugar.",
                 "importOccupied": "Cierra la importación o la partida activa antes de jugar.",
                 "stop": "Detener",
                 "fullscreen": "Pantalla completa",
@@ -1420,6 +1444,12 @@
             }
         },
         "ru": {
+            "resolution": {
+                "label": "Разрешение",
+                "help": "При более высоком разрешении изображение чётче. Частота кадров в игре в основном зависит от процессора.",
+                "720p": "720p (1280×720)",
+                "1080p": "1080p (1920×1080)"
+            },
             "cards": {
                 "serverRunning": "Перед импортом остановите локальный сервер и освободите порты 10000 и 10080.",
                 "title": "Карточки",
@@ -1457,6 +1487,8 @@
                 "saveFailed": "Не удалось сохранить имя в настройках программы запуска. Попробуйте ещё раз в настройках."
             },
             "play": {
+                "resolutionMalformed": "Не удалось безопасно прочитать настройки графики в config.json. Файл оставлен без изменений. Исправьте его и запустите игру снова.",
+                "resolutionUnavailable": "Не удалось применить разрешение в config.json. Проверьте разрешение на запись в папку профиля и запустите игру снова.",
                 "importOccupied": "Перед запуском игры завершите импорт карточек или текущую игру.",
                 "stop": "Остановить",
                 "fullscreen": "Полноэкранный режим",

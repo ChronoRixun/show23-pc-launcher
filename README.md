@@ -26,7 +26,9 @@ A Windows launcher for playing your own copy of MLB The Show 23 (PS4, `CUSA35521
 
 ### Play
 
-Press **Play**. The first time, the launcher asks for a player name (3 to 16 letters, digits, spaces, hyphens or underscores); you can change it later in Settings, where there is also a Fullscreen switch. Play starts the local server on your PC, then the game. When you close the game, the server stops too; **Stop** ends both.
+Press **Play**. The first time, the launcher asks for a player name (3 to 16 letters, digits, spaces, hyphens or underscores); you can change it later in Settings, where there are also **Fullscreen** and **Resolution** controls. Play starts the local server on your PC, then the game. When you close the game, the server stops too; **Stop** ends both.
+
+**Resolution** defaults to **1080p (1920×1080)**. Choose **720p (1280×720)** in Settings if you prefer. The launcher applies the choice on the next Play to both the internal render size and initial window size. If it cannot read or update `config.json`, it stops before launching and leaves the existing file in place.
 
 Play always starts version 1.00 of the game, also when the 1.21 update is set up. The update is used for card pictures; this release has no way to play 1.21 itself.
 

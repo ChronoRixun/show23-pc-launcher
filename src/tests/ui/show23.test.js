@@ -679,3 +679,39 @@ if (process.env.SHOW23_CARD_UI_EVIDENCE === '1') {
                 'article{max-width:760px}.dialog{position:relative}</style>' + rows.join(''), 'utf8');
     });
 }
+
+
+test('Resolution defaults to 1080p and saves either choice', async () => {
+    let resolution;
+    const view = open({
+        'get-settings': () => ({ language: 'en', resolution }),
+        'save-setting': (_requests, payload) => {
+            assert.equal(payload.key, 'resolution');
+            resolution = payload.value;
+            return true;
+        }
+    });
+    await view.clock.advance(0);
+    const low = view.id('resolution-720p'), high = view.id('resolution-1080p');
+    assert.equal(high.getAttribute('aria-checked'), 'true');
+    low.click();
+    await view.clock.advance(0);
+    assert.equal(resolution, '720p');
+    assert.equal(low.getAttribute('aria-checked'), 'true');
+    high.click();
+    await view.clock.advance(0);
+    assert.equal(resolution, '1080p');
+    assert.equal(high.getAttribute('aria-checked'), 'true');
+});
+
+test('Play explains that a malformed config was left untouched', async () => {
+    const view = open({
+        'get-show23': { ready: true },
+        'play-show23': true,
+        'get-play': { phase: 'idle', result: 'resolutionMalformed' }
+    });
+    await view.clock.advance(0);
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.match(view.id('play-result-text').textContent, /config\.json.*unchanged.*Play/i);
+});

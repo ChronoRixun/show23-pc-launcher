@@ -12,6 +12,7 @@ Extract the entire zip and run show23-pc.exe. Select Set up, choose your game (a
 
 Play
 Select Play. The first time, choose a player name. Play starts the local server and then the game; closing the game stops both. Play always starts game version 1.00, even when the 1.21 update is set up (the update is used for card pictures).
+Settings has Fullscreen and Resolution. The default is 1080p (1920x1080). Choose 720p (1280x720) if you prefer. The new size applies the next time you press Play.
 In Diamond Dynasty you start with a 26-player squad of Common cards from the game's roster and 5,000 Stubs. Packs, exchanges, programs, Showdown, Mini Seasons and Conquest work. The Community Market and buying Stubs are off, and there is no play against other people.
 
 To set up or play without the launcher, follow manual/README.txt.

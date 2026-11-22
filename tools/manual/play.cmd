@@ -12,7 +12,7 @@ if not exist "%runtime%\emulator\shadPS4.exe" goto missing
 exit /b %errorlevel%
 
 :usage
-echo Usage: play.cmd ^<install^> [--fullscreen] [--no-update-art] 1>&2
+echo Usage: play.cmd ^<install^> [--fullscreen] [--no-update-art] [--resolution 720^|1080] [--name ^<player name^>] 1>&2
 exit /b 2
 
 :missing

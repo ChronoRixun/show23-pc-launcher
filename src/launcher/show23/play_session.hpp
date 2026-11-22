@@ -1,6 +1,6 @@
 #pragma once
 
-#include "setup.hpp"
+#include "resolution.hpp"
 
 #include <array>
 #include <chrono>
@@ -26,6 +26,7 @@ namespace show23
         fs::path emulator;
         bool fullscreen{};
         std::string player_name;
+        resolution display_resolution = default_resolution;
     };
 
     struct play_options

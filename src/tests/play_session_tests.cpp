@@ -250,3 +250,20 @@ TEST(play_stop_ends_both_live_processes)
     CHECK(result.message == std::string_view("stopped"));
     CHECK(f.terminated("server-pid") && f.terminated("emulator-pid"));
 }
+
+
+TEST(play_blocks_before_starting_server_on_malformed_resolution_config)
+{
+    play_fixture fixture;
+    fixture.modes("listen", "success");
+    const auto config = fixture.profile() / "user/config.json";
+    write(config, "{malformed");
+    const auto result = run_play(fixture.request, fixture.options);
+    CHECK(result.message == std::string_view("resolutionMalformed"));
+    CHECK(!fs::exists(fixture.ca()));
+    CHECK(!fixture.pid("server-pid"));
+    CHECK(!fixture.pid("emulator-pid"));
+    std::string source;
+    std::ifstream(config) >> source;
+    CHECK(source == "{malformed");
+}
