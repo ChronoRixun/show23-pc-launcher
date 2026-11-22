@@ -2,6 +2,7 @@
 #include "part_store.hpp"
 #include "show23/input_paths.hpp"
 
+#include <TlHelp32.h>
 #include <atomic>
 #include <unordered_set>
 #include <utility>
@@ -53,6 +54,34 @@ namespace parts
                 info.nNumberOfLinks == 1) return file;
             CloseHandle(file);
             return nullptr;
+        }
+
+        bool runtime_process_running(const fs::path& slot)
+        {
+            if (slot.empty()) return false;
+            const auto active = inspect(slot);
+            if (!usable_directory(active)) return false;
+
+            const handle processes(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+            if (!processes) return true;
+            PROCESSENTRY32W entry{};
+            entry.dwSize = sizeof(entry);
+            if (!Process32FirstW(processes.get(), &entry)) return true;
+
+            std::wstring image(32768, L'\0');
+            do
+            {
+                // Windows can restrict queries to unrelated protected or other-user processes.
+                const handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID));
+                if (!process) continue;
+                auto length = static_cast<DWORD>(image.size());
+                if (!QueryFullProcessImageNameW(process.get(), 0, image.data(), &length)) continue;
+                std::wstring_view path(image.data(), length);
+                if (path.starts_with(L"\\\\?\\")) path.remove_prefix(4);
+                const fs::path executable(path);
+                if (contains(active.path, executable) || contains(slot, executable)) return true;
+            } while (Process32NextW(processes.get(), &entry));
+            return GetLastError() != ERROR_NO_MORE_FILES;
         }
 
         bool move(const fs::path& from, const fs::path& to)
@@ -440,7 +469,7 @@ namespace parts
         bool busy = false;
         const auto handle = open_lease(install, true, false, busy);
         if (handle) CloseHandle(handle);
-        return busy;
+        return busy || runtime_process_running(read_runtime(install).root);
     }
 
     runtime_check inspect_bundled_runtime(const fs::path& bundle, const fs::path& install, std::string_view launcher_version)
@@ -559,7 +588,18 @@ namespace parts
         // Each rename is resumable, and no existing slot is removed.
         if (plan.save_runtime)
         {
-            if (!move(live.runtime, old.runtime)) return "The original runtime could not be moved to its backup.";
+            const auto deadline = GetTickCount64() + 1500;
+            for (;;)
+            {
+                // A direct launch can start while Repair waits for a closed image to be released.
+                if (runtime_process_running(live.runtime)) return "in-use";
+                if (move(live.runtime, old.runtime)) break;
+                const auto error = GetLastError();
+                if ((error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) ||
+                    GetTickCount64() >= deadline)
+                    return "The original runtime could not be moved to its backup.";
+                Sleep(25);
+            }
             fixture_cut(bundle, "runtime-repair-after-save-slot");
         }
         if (plan.save_manifests)

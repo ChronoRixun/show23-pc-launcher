@@ -72,12 +72,20 @@ namespace versions
     std::string request_id();
 
     inline constexpr char notice_file[] = "notice.txt";
-    inline constexpr std::string_view notice_ids[] = {"rebuilt", "invalid-request", "ignored-older", "counter-write"};
+    inline constexpr std::string_view notice_ids[] = {"rebuilt", "invalid-request", "ignored-older", "counter-write", "fallback-write"};
     unsigned parse_notices(std::string_view text);
     std::string encode_notices(unsigned mask);
     bool plain_path(const fs::path& path, bool allow_missing_leaf = false);
 
-    enum class check_mode { quick, full, partial };
+    enum class update_channel { stable, beta };
+    std::optional<update_channel> read_channel(const fs::path& root);
+    bool write_channel(const fs::path& root, update_channel value);
+
+    // A confirmation belongs to an exact sealed inventory in a named folder.
+    std::string read_confirmation(const fs::path& root, std::string_view folder);
+    bool write_confirmation(const fs::path& root, std::string_view folder, std::string_view fingerprint);
+
+    enum class check_mode { quick, startup, full, partial };
     struct verification
     {
         std::string fingerprint, bad_file;

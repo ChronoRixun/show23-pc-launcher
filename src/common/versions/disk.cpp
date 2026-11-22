@@ -229,10 +229,15 @@ namespace versions
             std::error_code error;
             const auto size = fs::file_size(extended(path), error);
             if (error || size != entry.size) return bad(entry.path);
-            if (mode != check_mode::quick && hash_file(path, entry.size) != entry.sha256) return bad(entry.path);
-            listed.emplace(fold(entry.path), entry.path);
+            const auto key = fold(entry.path);
+            const bool startup_file = key == launcher_exe ||
+                (key.starts_with("cef/") && key.ends_with(".dll"));
+            if ((mode == check_mode::full || mode == check_mode::partial ||
+                 (mode == check_mode::startup && startup_file)) &&
+                hash_file(path, entry.size) != entry.sha256) return bad(entry.path);
+            listed.emplace(key, entry.path);
         }
-        if (mode == check_mode::quick) return {manifest->fingerprint, {}};
+        if (mode == check_mode::quick || mode == check_mode::startup) return {manifest->fingerprint, {}};
 
         std::error_code error;
         const fs::path base(extended(folder));

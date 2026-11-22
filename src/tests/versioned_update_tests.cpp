@@ -41,13 +41,17 @@ namespace
             if (!file) throw std::runtime_error("Could not write update fixture.");
         }
 
-        void complete(std::string_view name)
+        static std::string inventory_for(std::string_view launcher)
+        {
+            return versions::encode(versions::inventory{"0.1.4", "stable", 1,
+                {{versions::launcher_exe, versions::sha256(launcher), launcher.size()}}, {}});
+        }
+
+        void complete(std::string_view name, std::string_view launcher = "exe")
         {
             const auto folder = std::string(name) + '/';
-            const versions::inventory inventory{"0.1.4", "stable", 1,
-                {{versions::launcher_exe, versions::sha256("exe"), 3}}, {}};
-            write(folder + versions::launcher_exe, "exe");
-            write(folder + "version.txt", versions::encode(inventory));
+            write(folder + versions::launcher_exe, launcher);
+            write(folder + "version.txt", inventory_for(launcher));
         }
 
         fs::path zip(std::initializer_list<std::pair<std::string, std::string>> entries)
@@ -69,6 +73,12 @@ namespace
             fclose(file);
             if (!good) throw std::runtime_error("Could not write fixture ZIP.");
             return path;
+        }
+
+        fs::path launcher_zip()
+        {
+            const std::string slot = "show23-pc-0.1.4-win64-portable/show23-pc/versions/0.1.4/";
+            return zip({{slot + versions::launcher_exe, "exe"}, {slot + "version.txt", inventory_for("exe")}});
         }
     };
 }
@@ -159,4 +169,107 @@ TEST(versioned_updates_reject_an_unsafe_file_in_the_selected_subtree)
     CHECK(!partial.extract(zip, [] { return false; }).empty());
     CHECK(!fs::exists(fixture.root / "user.txt"));
     CHECK(!fs::exists(fixture.root / "0.1.4.partial"));
+}
+
+TEST(versioned_updates_preserve_different_valid_same_tag_bytes_and_their_receipt)
+{
+    update_fixture fixture;
+    fixture.complete("0.1.4", "old");
+    fixture.write("0.1.4.launcher.json", "original receipt");
+    fixture.write(".download-12/launcher.json", "new receipt");
+    CHECK(versions::verify(fixture.root / "0.1.4", versions::check_mode::full));
+
+    update::partial_slot partial(fixture.root, "0.1.4");
+    CHECK(partial.extract(fixture.launcher_zip(), [] { return false; }).empty());
+    std::string folder;
+    versions::pointer arrival;
+    arrival.current = "0.1.3";
+    CHECK(partial.publish(fixture.root / ".download-12/launcher.json", &arrival, folder).empty());
+    CHECK(folder == "0.1.4~2");
+    CHECK(versions::verify(fixture.root / "0.1.4~2", versions::check_mode::full));
+    CHECK(versions::read_record(fixture.root / "0.1.4~2/show23-pc-launcher.exe") == "exe");
+    CHECK(versions::read_record(fixture.root / "0.1.4~2.launcher.json") == "new receipt");
+    CHECK(versions::read_record(fixture.root / "0.1.4/show23-pc-launcher.exe") == "old");
+    CHECK(versions::read_record(fixture.root / "0.1.4.launcher.json") == "original receipt");
+}
+
+TEST(versioned_updates_reuse_a_verified_same_tag_slot_matching_the_download)
+{
+    update_fixture fixture;
+    fixture.complete("0.1.4", "old");
+    fixture.complete("0.1.4~2");
+    fixture.write(".download-12/launcher.json", "new receipt");
+
+    std::string folder;
+    {
+        update::partial_slot partial(fixture.root, "0.1.4");
+        CHECK(partial.extract(fixture.launcher_zip(), [] { return false; }).empty());
+        versions::pointer arrival;
+        arrival.current = "0.1.3";
+        CHECK(partial.publish(fixture.root / ".download-12/launcher.json", &arrival, folder).empty());
+    }
+    CHECK(folder == "0.1.4~2");
+    CHECK(versions::read_record(fixture.root / "0.1.4~2.launcher.json") == "new receipt");
+    CHECK(!fs::exists(fixture.root / "0.1.4.launcher.json"));
+    CHECK(!fs::exists(fixture.root / "0.1.4~3"));
+    CHECK(!fs::exists(fixture.root / "0.1.4.partial"));
+}
+
+TEST(versioned_updates_publish_above_an_eligible_conflicting_suffix)
+{
+    update_fixture fixture;
+    fixture.complete("0.1.4");
+    fixture.complete("0.1.4~4", "old");
+    fixture.write("0.1.4~4.launcher.json", "original receipt");
+    fixture.write(".download-12/launcher.json", "new receipt");
+
+    update::partial_slot partial(fixture.root, "0.1.4");
+    CHECK(partial.extract(fixture.launcher_zip(), [] { return false; }).empty());
+    versions::pointer arrival;
+    arrival.current = "0.1.3";
+    std::string folder;
+    CHECK(partial.publish(fixture.root / ".download-12/launcher.json", &arrival, folder).empty());
+    CHECK(folder == "0.1.4~5");
+    CHECK(versions::verify(fixture.root / "0.1.4~5", versions::check_mode::full));
+    CHECK(versions::read_record(fixture.root / "0.1.4~5.launcher.json") == "new receipt");
+    CHECK(versions::read_record(fixture.root / "0.1.4~4.launcher.json") == "original receipt");
+    CHECK(!fs::exists(fixture.root / "0.1.4.launcher.json"));
+}
+
+TEST(versioned_updates_do_not_reuse_a_previous_slot_for_implicit_arrival)
+{
+    update_fixture fixture;
+    fixture.complete("0.1.4");
+    fixture.write(".download-12/launcher.json", "new receipt");
+
+    update::partial_slot partial(fixture.root, "0.1.4");
+    CHECK(partial.extract(fixture.launcher_zip(), [] { return false; }).empty());
+    versions::pointer arrival;
+    arrival.current = "0.1.3";
+    arrival.previous = "0.1.4";
+    std::string folder;
+    CHECK(partial.publish(fixture.root / ".download-12/launcher.json", &arrival, folder).empty());
+    CHECK(folder == "0.1.4~2");
+    CHECK(versions::read_record(fixture.root / "0.1.4~2.launcher.json") == "new receipt");
+    CHECK(!fs::exists(fixture.root / "0.1.4.launcher.json"));
+}
+
+TEST(versioned_updates_preserve_the_retry_gate_for_identical_failed_bytes)
+{
+    update_fixture fixture;
+    fixture.complete("0.1.4");
+    fixture.write("0.1.4.launcher.json", "original receipt");
+    fixture.write(".download-12/launcher.json", "new receipt");
+
+    update::partial_slot partial(fixture.root, "0.1.4");
+    CHECK(partial.extract(fixture.launcher_zip(), [] { return false; }).empty());
+    versions::pointer arrival;
+    arrival.current = "0.1.3";
+    const auto failed = versions::verify(fixture.root / "0.1.4", versions::check_mode::full);
+    arrival.failed.push_back({"0.1.4", failed.fingerprint, "failed to start"});
+    std::string folder;
+    CHECK(!partial.publish(fixture.root / ".download-12/launcher.json", &arrival, folder).empty());
+    CHECK(folder.empty());
+    CHECK(!fs::exists(fixture.root / "0.1.4~2"));
+    CHECK(versions::read_record(fixture.root / "0.1.4.launcher.json") == "original receipt");
 }

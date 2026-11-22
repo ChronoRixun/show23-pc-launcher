@@ -1,5 +1,7 @@
 #include "std_include.hpp"
 #include "release_source.hpp"
+#include "versioned_start.hpp"
+#include <versions/records.hpp>
 #include "release_resolver.hpp"
 
 #include <utils/http.hpp>
@@ -13,6 +15,19 @@ namespace release_source
     namespace
     {
         using release_channel::channel;
+        std::mutex channel_mutex;
+
+        bool write_bootstrap_channel(channel value)
+        {
+            const auto& layout = versioned_start::layout();
+            if (!layout) return true;
+            const auto temp = layout.versions / "channel.txt.tmp";
+            std::error_code error;
+            if (versions::plain_path(temp) && std::filesystem::is_regular_file(temp, error) && !error)
+                std::filesystem::remove(temp, error);
+            return !error && versions::write_channel(layout.versions, value == channel::stable ?
+                versions::update_channel::stable : versions::update_channel::beta);
+        }
 
         std::string api_base()
         {
@@ -69,10 +84,31 @@ namespace release_source
         return release_channel::parse_channel(utils::properties::load(property_keys::UPDATE_CHANNEL).value_or(""));
     }
 
+    void sync_bootstrap_channel()
+    {
+        std::lock_guard lock(channel_mutex);
+        if (!write_bootstrap_channel(current_channel()))
+            utils::logger::write("could not save the bootstrap update channel");
+    }
+
     void set_channel(const channel value)
     {
-        if (current_channel() != value) shared().invalidate();
-        utils::properties::store(property_keys::UPDATE_CHANNEL, release_channel::channel_name(value));
+        std::lock_guard lock(channel_mutex);
+        const auto previous = current_channel();
+        // Make a Stable selection durable before there is any chance of another start.
+        if (value == channel::stable && !write_bootstrap_channel(value)) return;
+        try
+        {
+            utils::properties::store(property_keys::UPDATE_CHANNEL, release_channel::channel_name(value));
+            if (current_channel() == value && write_bootstrap_channel(value))
+            {
+                if (previous != value) shared().invalidate();
+                return;
+            }
+        }
+        catch (const std::exception&) {}
+        utils::properties::store(property_keys::UPDATE_CHANNEL, release_channel::channel_name(previous));
+        write_bootstrap_channel(previous);
     }
 
     release_channel::outcome resolve(const std::string& repo, const channel value, const std::vector<std::string>& required, const bool force)

@@ -1089,7 +1089,7 @@
 
     function paintStartup() {
         const { waiting, deferred, notices } = state.startup;
-        const known = new Set(['rebuilt', 'invalid-request', 'ignored-older', 'counter-write']);
+        const known = new Set(['rebuilt', 'invalid-request', 'ignored-older', 'counter-write', 'fallback-write']);
         const lines = (notices || '').split('\n').filter(id => known.has(id)).map(id => t('startup.' + id));
         if (waiting) lines.unshift(t('startup.waiting'));
         if (deferred) lines.unshift(t('startup.deferred'));

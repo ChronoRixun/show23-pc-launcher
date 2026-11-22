@@ -71,22 +71,30 @@ namespace bootstrap
         {
             job.reset(CreateJobObjectW(nullptr, nullptr));
             if (!job) return GetLastError();
-            // Closing the bootstrap after a confirmed start must not kill the game.
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+                return GetLastError();
         }
+        const DWORD attribute_count = trial ? 2 : 1;
         SIZE_T bytes{};
-        InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes);
+        InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &bytes);
         if (!bytes) return GetLastError();
         std::vector<unsigned char> storage(bytes);
         auto* attributes = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-        if (!InitializeProcThreadAttributeList(attributes, 1, 0, &bytes)) return GetLastError();
+        if (!InitializeProcThreadAttributeList(attributes, attribute_count, 0, &bytes)) return GetLastError();
+        auto inherited = confirm.get();
+        auto trial_job = job.get();
         struct cleanup
         {
             PPROC_THREAD_ATTRIBUTE_LIST list;
             ~cleanup() { DeleteProcThreadAttributeList(list); }
         } release{attributes};
-        auto inherited = confirm.get();
         if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
             &inherited, sizeof(inherited), nullptr, nullptr)) return GetLastError();
+        // Apply the job limit before the trial starts running.
+        if (trial && !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+            &trial_job, sizeof(trial_job), nullptr, nullptr)) return GetLastError();
         const auto command = quote(exe.native()) + L" --bootstrap " + quote(bootstrap.native()) +
             L" --bootstrap-version " + std::to_wstring(versions::bootstrap_version) +
             L" --folder " + quote(widen(folder)) + (trial ? L" --trial" : L"") +
@@ -102,24 +110,36 @@ namespace bootstrap
         {
             auto buffer = cmd;
             if (CreateProcessW(exe.c_str(), buffer.data(), nullptr, nullptr, TRUE,
-                EXTENDED_STARTUPINFO_PRESENT | (trial ? CREATE_SUSPENDED : 0), nullptr,
-                exe.parent_path().c_str(), &startup.StartupInfo, &info))
+                EXTENDED_STARTUPINFO_PRESENT, nullptr, exe.parent_path().c_str(), &startup.StartupInfo, &info))
             {
                 process.reset(info.hProcess);
                 const handle thread(info.hThread);
-                if (trial && (!AssignProcessToJobObject(job.get(), process.get()) || ResumeThread(thread.get()) == DWORD(-1)))
-                {
-                    error = GetLastError();
-                    TerminateProcess(process.get(), error);
-                    WaitForSingleObject(process.get(), INFINITE);
-                    process.reset(nullptr);
-                    return error;
-                }
                 return ERROR_SUCCESS;
             }
             error = GetLastError();
             if (attempt < 2) Sleep(500);
         }
         return error;
+    }
+
+    bool child::release_trial_kill_on_close()
+    {
+        if (!job || !confirm)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return false;
+        }
+        const auto status = WaitForSingleObject(confirm.get(), 0);
+        if (status != WAIT_OBJECT_0)
+        {
+            if (status == WAIT_TIMEOUT) SetLastError(ERROR_NOT_READY);
+            return false;
+        }
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        if (!QueryInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits), nullptr))
+            return false;
+        limits.BasicLimitInformation.LimitFlags &= ~JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        return SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)) != FALSE;
     }
 }

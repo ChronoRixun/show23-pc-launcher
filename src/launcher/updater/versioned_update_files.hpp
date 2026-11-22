@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+namespace versions { struct pointer; }
+
 namespace versioned_update_files
 {
     bool has_space(std::uint64_t available, std::uint64_t archive, std::uint64_t expanded);
@@ -24,14 +26,13 @@ namespace versioned_update_files
 
         std::string extract(const std::filesystem::path& zip, const std::function<bool()>& cancelled);
 
-        // Publish only after checking that the selected channel and consent are still current.
-        std::string publish(const std::filesystem::path& manifest, const std::optional<std::string>& reuse,
-                            std::string& folder);
+        // Publish under the caller's selection lock. A forward update supplies the pointer for implicit arrival.
+        std::string publish(const std::filesystem::path& manifest, const versions::pointer* arrival, std::string& folder);
 
     private:
         std::filesystem::path root_, folder_;
-        std::string version_;
+        std::string version_, fingerprint_;
         void* marker_{};
-        bool owns_folder_{}, verified_{};
+        bool owns_folder_{};
     };
 }

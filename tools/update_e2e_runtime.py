@@ -1,4 +1,4 @@
-"""Exercise real runtime publication, Repair and the Windows manual Play lease."""
+"""Exercise runtime publication, Repair and contention from Windows processes."""
 
 import ctypes
 from ctypes import wintypes
@@ -321,6 +321,44 @@ def manual_case(ctx, case_id, port):
             "wrapperExit": wrapper.returncode, "processTreeExited": True, "repairAfterKill": True}
 
 
+def unleased_case(ctx, case_id, port):
+    f = Fixture(ctx, case_id, port, python_files())
+    f.damage()
+    original = inventory(f.install)
+    interpreter = f.runtime_slot / "server/python/python.exe"
+    ready = f.top / "direct-runtime-ready"
+    script = ("from pathlib import Path; import os, sys, time; "
+              "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(90)")
+    with (f.top / "direct-runtime.log").open("wb") as log:
+        process = subprocess.Popen([interpreter, "-I", "-S", "-c", script, ready],
+                                   cwd=f.top, env=f.env, stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+        try:
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline and process.poll() is None:
+                if ready.is_file() and ready.stat().st_size:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f"Direct runtime process failed to start. See {log.name}")
+            assert int(ready.read_text()) == process.pid
+            state_is(f.action("inspect-runtime"), repairable=True, in_use=True)
+            refused = state_is(f.action("repair"), repairable=True, in_use=True)
+            assert not refused["ok"] and refused["message"] == "in-use", refused
+            assert inventory(f.install) == original
+            assert process.poll() is None
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+    state_is(f.action("inspect-runtime"), repairable=True)
+    assert state_is(f.action("repair"), ready=True)["ok"]
+    f.compare_live()
+    f.check_protected()
+    return {"repairWhileRunning": refused, "directRuntimePid": process.pid,
+            "directRuntimeExit": process.returncode, "repairAfterExit": True}
+
+
 def run(ctx):
     fresh = (
         ("E15a", "runtime-fresh-before-slot", False, False),
@@ -349,3 +387,5 @@ def run(ctx):
                        lambda: repair_case(ctx, case_id, port, cut, step))
         ctx.record("E15j", "Windows manual Play blocks Repair until its process tree is gone",
                    lambda: manual_case(ctx, "E15j", port))
+        ctx.record("E15k", "An unleased process from the active runtime blocks Repair until exit",
+                   lambda: unleased_case(ctx, "E15k", port))

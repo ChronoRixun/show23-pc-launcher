@@ -18,6 +18,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import update_e2e_boot
 import update_e2e_legacy
 import update_e2e_runtime
+import update_e2e_review
+import update_e2e_reuse
 import update_e2e_window
 
 OLD = "0.1.3-beta.1"
@@ -104,9 +106,9 @@ class Matrix:
     def __init__(self, options):
         self.__dict__.update(vars(options))
         self.root = self.work.resolve()
-        scope = (PROBES / "m4").resolve()
-        if self.root == scope or scope not in self.root.parents:
-            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4.")
+        scopes = [(PROBES / milestone).resolve() for milestone in ("m4", "m5")]
+        if not any(scope in self.root.parents for scope in scopes):
+            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4 or m5.")
         self.root.mkdir()
         self.results = []
 
@@ -191,7 +193,7 @@ class Copy:
 
 
 @contextmanager
-def feed(version, files):
+def feed(version, files, *, before_listing=None):
     name = asset_name(version) + ".zip"
     payload = make_asset(version, files)
     manifest = release_manifest(version, name, payload)
@@ -208,6 +210,8 @@ def feed(version, files):
         def do_GET(self):
             requests.append(self.path)
             if self.path in (prefix + "?per_page=30", prefix + "/latest"):
+                if before_listing:
+                    before_listing()
                 origin = f"http://127.0.0.1:{self.server.server_port}"
                 release = {"tag_name": "v" + version, "prerelease": "-" in version, "draft": False,
                            "assets": [{"name": leaf, "size": len(data),
@@ -323,6 +327,9 @@ def channel_roundtrip(ctx, redownload):
     with feed(BETA, release_files(BETA, ctx.next_beta.read_bytes())) as (port, beta_requests, _):
         copy.start(port=port, action="update")
     expect_current(copy, BETA, STABLE)
+    stray = "0.1.4-beta.0"
+    # Retain a Beta other than previous, as would happen after several Beta updates.
+    write_files(copy.versions / stray, release_files(stray, ctx.next_beta.read_bytes()))
     if redownload:
         victim = (copy.versions / STABLE).resolve()
         assert victim.parent == copy.versions.resolve()
@@ -337,7 +344,11 @@ def channel_roundtrip(ctx, redownload):
     request = next(line[13:] for line in pointer.splitlines() if line.startswith("last-request "))
     assert len(request) == 16
     assert not (copy.versions / "request.txt").exists()
+    copy.start()
+    assert expect_current(copy, STABLE, BETA) == pointer
+    assert (copy.versions / stray).is_dir()
     return {"betaRequests": beta_requests, "stableRequests": stable_requests, "consumedRequest": request,
+            "reopenedOnStable": True,
             "pointer": pointer, **copy.check(except_settings=("launcher-update-channel",))}
 
 
@@ -415,6 +426,13 @@ def run(ctx):
         ctx.record("E5-" + cut, "Restart recovers the verified arrival or keeps current and cleans artifacts.",
                    lambda cut=cut, committed=committed: updater_cut(ctx, cut, committed))
     update_e2e_boot.run(ctx)
+    update_e2e_review.run(ctx)
+    for case, same, competing in (("E16-mismatch", False, False), ("E16-identical", True, False),
+                                  ("E16-competing", True, True)):
+        ctx.record(case, "A downloaded receipt only identifies identical verified bytes; the selected bytes start.",
+                   lambda case=case, same=same, competing=competing: update_e2e_reuse.same_tag(
+                       ctx, case, same, Copy, release_files, feed, expect_current, transient, write_files,
+                       NEW, OLD, competing=competing))
     ctx.record("E8-reuse", "Stable to Beta and back to the verified Stable slot without a download.",
                lambda: channel_roundtrip(ctx, False))
     ctx.record("E8-download", "Stable to Beta and back to Stable by explicit download after its slot is removed.",

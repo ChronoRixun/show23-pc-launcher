@@ -1,11 +1,15 @@
 #include "std_include.hpp"
+#include <cstdio>
 #include "test.hpp"
+#include "show23/input_paths.hpp"
+#include <thread>
 #include "updater/part_store.hpp"
 #include <Windows.h>
 
 #include <fstream>
 #include <iterator>
 #include <rapidjson/writer.h>
+#include <utils/finally.hpp>
 
 namespace
 {
@@ -318,6 +322,89 @@ TEST(bundled_runtime_leases_allow_shared_play_and_exclude_repair)
         CHECK(!play);
     }
     CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
+}
+
+TEST(bundled_runtime_excludes_unleased_images_from_new_and_interrupted_repair)
+{
+    std::wstring test_image(32768, L'\0');
+    const auto length = GetModuleFileNameW(nullptr, test_image.data(), static_cast<DWORD>(test_image.size()));
+    CHECK(length && length < test_image.size());
+    if (!length || length >= test_image.size()) return;
+    test_image.resize(length);
+
+    for (const bool pending : {false, true})
+    {
+        fixture f;
+        CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+        const auto slot = f.install / "runtime/0.1.0";
+        const auto damaged = slot / "emulator/shadPS4.exe";
+        const auto image = slot / "emulator/fixture-child.exe";
+        const auto transaction = f.install / "runtime/.repair-0.1.0-1";
+        const auto backup = transaction / "old/runtime/0.1.0";
+        fs::copy_file(test_image, image);
+        write(damaged, "bad");
+
+        if (pending)
+        {
+            fs::create_directories(transaction / "new");
+            fs::copy(f.bundle / "runtime", transaction / "new/runtime", fs::copy_options::recursive);
+            fs::copy(f.bundle / "manifests", transaction / "new/manifests", fs::copy_options::recursive);
+            fs::create_directories(transaction / "old/runtime");
+            fs::create_directories(transaction / "old/manifests");
+        }
+
+        {
+            auto command = L"\"" + image.native() + L"\" --fake-child";
+            STARTUPINFOW startup{};
+            startup.cb = sizeof(startup);
+            PROCESS_INFORMATION child{};
+            const auto started = CreateProcessW(image.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                nullptr, f.root.c_str(), &startup, &child);
+            CHECK(started);
+            if (!started) continue;
+            CloseHandle(child.hThread);
+            const auto cleanup = utils::finally([&]
+            {
+                TerminateProcess(child.hProcess, 0);
+                CHECK(WaitForSingleObject(child.hProcess, 10000) == WAIT_OBJECT_0);
+                CloseHandle(child.hProcess);
+            });
+            CHECK(WaitForSingleObject(child.hProcess, 0) == WAIT_TIMEOUT);
+            {
+                const parts::runtime_lease exclusive(f.install, true);
+                CHECK(exclusive);
+            }
+            CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").repairable);
+            CHECK(parts::runtime_in_use(f.install));
+            CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0") == "in-use");
+            CHECK(fs::exists(damaged) && read(damaged) == "bad");
+            CHECK(fs::exists(transaction) == pending);
+            CHECK(!fs::exists(backup));
+            CHECK(WaitForSingleObject(child.hProcess, 0) == WAIT_TIMEOUT);
+        }
+        CHECK(!parts::runtime_in_use(f.install));
+        std::jthread release_directory;
+        if (pending)
+        {
+            // Model a short-lived handle Windows can retain after a process has exited.
+            show23::input_paths::handle lock(CreateFileW(slot.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+            CHECK(lock);
+            if (lock)
+                release_directory = std::jthread([locked = std::move(lock)]
+                {
+                    Sleep(750);
+                    (void)locked;
+                });
+        }
+        const auto repaired = parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0");
+        if (!repaired.empty())
+            std::fprintf(stderr, "Repair after process exit (pending=%d, Win32=%lu): %s\n",
+                static_cast<int>(pending), GetLastError(), repaired.c_str());
+        CHECK(repaired.empty());
+        CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").ready);
+        CHECK(fs::exists(backup / "emulator/shadPS4.exe") && read(backup / "emulator/shadPS4.exe") == "bad");
+    }
 }
 
 TEST(bundled_runtime_requires_the_card_importer_in_the_manifest)

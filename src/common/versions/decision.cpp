@@ -19,6 +19,16 @@ namespace versions
             return item && static_cast<bool>(*item);
         }
 
+        bool confirmed(const disk_view& view, std::string_view name)
+        {
+            return good(view, name) && view.confirmed_folders.contains(name);
+        }
+
+        bool allows_trial(const disk_view& view, std::string_view name)
+        {
+            return !view.stable_only || folder_version(name).find('-') == std::string_view::npos;
+        }
+
         void clear_failed(pointer& state, const std::string& folder)
         {
             std::erase_if(state.failed, [&](const auto& item) { return item.folder == folder; });
@@ -39,11 +49,12 @@ namespace versions
     decision failed_commit(const disk_view& view)
     {
         if (view.where == step::confirmed) return {action::wait};
-        if (good(view, view.state.current))
+        const auto& fallback = confirmed(view, view.state.current) ? view.state.current : view.state.previous;
+        if (confirmed(view, fallback))
         {
-            if (view.prepare) return {action::prepared, {}, view.state.current};
+            if (view.prepare) return {action::prepared, {}, fallback};
             return view.launches < launch_limit
-                ? decision{action::launch_current, {}, view.state.current} : decision{action::dialog_current};
+                ? decision{action::launch_current, {}, fallback} : decision{action::dialog_current};
         }
         return {action::dialog_write};
     }
@@ -54,6 +65,9 @@ namespace versions
         switch (view.where)
         {
         case step::validate_names:
+        {
+            // These bytes may be valid, but the current folder name cannot confirm a repack.
+            std::string changed_current;
             for (auto* name : {&next.current, &next.previous, &next.trial})
             {
                 if (name->empty() || good(view, *name)) continue;
@@ -61,17 +75,32 @@ namespace versions
                 mark_failed(next, *name, bad, "damaged:" + (bad ? bad->bad_file : std::string("version.txt")));
                 name->clear();
             }
+            if (!next.current.empty() && !confirmed(view, next.current))
+                changed_current = std::exchange(next.current, {});
+            if (!next.previous.empty() && !confirmed(view, next.previous)) next.previous.clear();
             if (next.current.empty() && !next.previous.empty()) next.current = std::exchange(next.previous, {});
-            if (!next.current.empty() && next.current == next.trial) next.trial.clear();
-            if (next.trial.empty()) next.starts = 0;
+            if (next.current == next.trial || !allows_trial(view, next.trial)) next.trial.clear();
+            if (next.trial.empty())
+            {
+                next.starts = 0;
+                if (!changed_current.empty() && allows_trial(view, changed_current))
+                {
+                    const auto* replacement = lookup(view, changed_current);
+                    const auto prior_failure = std::ranges::any_of(next.failed, [&](const auto& failure) {
+                        return failure.folder == changed_current && replacement && failure.fingerprint == replacement->fingerprint;
+                    });
+                    if (!prior_failure) next.trial = std::move(changed_current);
+                }
+            }
             if (next != view.state) return {action::next, next};
             return {action::next};
+        }
 
         case step::process_request:
             if (!view.request_present) return {action::next};
             if (view.incoming && view.incoming->id == next.last_request) return {action::next, {}, {}, true};
             if (!view.incoming || !good(view, view.incoming->trial) ||
-                view.incoming->trial == next.current ||
+                view.incoming->trial == next.current || !allows_trial(view, view.incoming->trial) ||
                 (view.incoming->reason == "switch-to-stable" &&
                     folder_version(view.incoming->trial).find('-') != std::string_view::npos))
                 return {action::next, {}, {}, true, true};
@@ -87,7 +116,8 @@ namespace versions
             std::string candidate;
             for (const auto& [name, result] : view.folders)
             {
-                if (!valid_folder(name) || view.rejected_arrivals.contains(name) || name == next.current || name == next.previous ||
+                if (!valid_folder(name) || !allows_trial(view, name) ||
+                    view.rejected_arrivals.contains(name) || name == next.current || name == next.previous ||
                     (!next.current.empty() && compare(name, next.current) <= 0) ||
                     std::ranges::any_of(next.failed, [&](const auto& failed)
                         { return failed.folder == name && failed.fingerprint == result.fingerprint; })) continue;
@@ -110,7 +140,7 @@ namespace versions
         case step::choose:
             if (view.prepare)
             {
-                if (good(view, next.current)) return {action::prepared, {}, next.current};
+                if (confirmed(view, next.current)) return {action::prepared, {}, next.current};
                 if (good(view, next.trial) && next.starts < trial_starts) return {action::prepared, {}, next.trial};
                 return {action::dialog_none};
             }
@@ -123,13 +153,15 @@ namespace versions
                 return {action::next, next};
             }
             if (view.launches >= launch_limit)
-                return {good(view, next.current) ? action::dialog_current : action::dialog_none};
+                return {confirmed(view, next.current) ? action::dialog_current : action::dialog_none};
+            if (view.launches + 1 >= launch_limit && confirmed(view, next.current))
+                return {action::launch_current, {}, next.current};
             if (!next.trial.empty())
             {
                 ++next.starts;
                 return {action::launch_trial, next, next.trial};
             }
-            if (good(view, next.current)) return {action::launch_current, {}, next.current};
+            if (confirmed(view, next.current)) return {action::launch_current, {}, next.current};
             return {action::dialog_none};
 
         case step::confirmed:
@@ -141,7 +173,7 @@ namespace versions
 
         case step::retry:
             for (const auto& failed : next.failed)
-                if (failed.folder != next.current && good(view, failed.folder))
+                if (failed.folder != next.current && allows_trial(view, failed.folder) && good(view, failed.folder))
                     return {action::next, {}, failed.folder};
             return {action::dialog_none};
         }

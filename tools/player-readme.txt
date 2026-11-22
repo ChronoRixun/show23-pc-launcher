@@ -26,6 +26,11 @@ Diamond Dynasty progress: data/profiles/default/server
 Logs: data/logs
 Back up data/profiles to keep your progress.
 
+In the portable launcher folder
+Launcher settings and browser logs: show23-pc/user
+Launcher log: show23-pc/data/logs (Support > Open logs folder)
+Startup and version-selection log: show23-pc/versions/bootstrap.log
+
 Known limits
 - Small stutters, and games do not hold a steady 60 frames a second.
 - A full CPU game has not yet been played start to finish in this release.

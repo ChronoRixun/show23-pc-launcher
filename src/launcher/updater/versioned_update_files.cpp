@@ -6,6 +6,7 @@
 #include <miniz.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <fstream>
 #include <limits>
@@ -48,6 +49,32 @@ namespace versioned_update_files
         {
             for (auto& c : text) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
             return text;
+        }
+
+        struct occupied_slot
+        {
+            unsigned number;
+            std::string name;
+        };
+
+        std::optional<std::vector<occupied_slot>> occupied_slots(const fs::path& root, std::string_view version)
+        {
+            std::vector<occupied_slot> slots;
+            std::error_code error;
+            for (fs::directory_iterator it(root, error), end; !error && it != end; it.increment(error))
+            {
+                const auto filename = it->path().filename().u8string();
+                std::string name(filename.begin(), filename.end());
+                const auto folded = ascii_lower(name);
+                if (versions::folder_version(folded) != version || !versions::valid_folder(folded)) continue;
+                unsigned number = 1;
+                if (folded != version)
+                    std::from_chars(folded.data() + version.size() + 1, folded.data() + folded.size(), number);
+                slots.push_back({number, std::move(name)});
+            }
+            if (error) return {};
+            std::ranges::sort(slots, std::greater<>(), &occupied_slot::number);
+            return slots;
         }
 
         // ZIP data is written only through this bounded stream into the caller's private partial.
@@ -250,25 +277,44 @@ namespace versioned_update_files
 
         const auto result = versions::verify(folder_, versions::check_mode::partial);
         if (!result) return "The extracted launcher update failed verification (" + result.bad_file + ").";
-        verified_ = true;
+        fingerprint_ = result.fingerprint;
         versions::fixture::kill_at(root_.parent_path(), "U4-verified");
         return {};
     }
 
-    std::string partial_slot::publish(const fs::path& manifest, const std::optional<std::string>& reuse,
-                                     std::string& folder)
+    std::string partial_slot::publish(const fs::path& manifest, const versions::pointer* arrival, std::string& folder)
     {
-        if (!verified_ || !marker_) return "The launcher update has not been verified.";
-        if (reuse && (versions::folder_version(*reuse) != version_ || !versions::valid_folder(*reuse)))
-            return "The reusable launcher version folder is invalid.";
-        auto name = reuse.value_or(version_);
+        if (fingerprint_.empty() || !marker_) return "The launcher update has not been verified.";
+        const auto occupied = occupied_slots(root_, version_);
+        if (!occupied) return "Could not find a free launcher version folder.";
+
+        std::string name;
+        for (const auto& slot : *occupied)
+        {
+            if (!versions::valid_folder(slot.name) || !plain_directory(root_ / slot.name) ||
+                (arrival && (slot.name == arrival->previous || slot.name == arrival->current))) continue;
+            const auto verified = versions::verify(root_ / slot.name, versions::check_mode::full);
+            if (!verified) continue;
+
+            const bool identical = verified.fingerprint == fingerprint_;
+            if (arrival && std::ranges::any_of(arrival->failed, [&](const auto& failure)
+                { return failure.folder == slot.name && failure.fingerprint == verified.fingerprint; }))
+            {
+                if (identical) return "This launcher version failed to start. Use Try again to request another start.";
+                continue;
+            }
+            if (identical) name = slot.name;
+            // Implicit arrival tries the highest eligible same-tag slot first.
+            if (identical || arrival) break;
+        }
+
+        const bool reuse = !name.empty();
         if (!reuse)
         {
-            for (unsigned slot = 2; path_present(root_ / name); ++slot)
-            {
-                if (slot > 10000) return "Could not find a free launcher version folder.";
-                name = version_ + "~" + std::to_string(slot);
-            }
+            const auto highest = occupied->empty() ? 0u : occupied->front().number;
+            if (highest == std::numeric_limits<unsigned>::max()) return "Could not find a free launcher version folder.";
+            name = highest ? version_ + '~' + std::to_string(highest + 1) : version_;
+            if (path_present(root_ / name)) return "Could not find a free launcher version folder.";
         }
         const auto receipt = root_ / (name + ".launcher.json");
         if (!versions::plain_path(receipt, true) || !versions::plain_path(manifest) ||

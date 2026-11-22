@@ -105,6 +105,8 @@ namespace
     }
 }
 
+std::optional<int> fake_bootstrap_job_child(std::span<wchar_t*> args);
+
 int wmain(const int argc, wchar_t** argv)
 {
     if (argc > 1 && std::wstring_view(argv[1]) == L"--m4-runtime-proof") return m4_runtime_proof(argc, argv);
@@ -117,6 +119,7 @@ int wmain(const int argc, wchar_t** argv)
         return result ? 0 : 1;
     }
     if (const auto fake = fake_bootstrap_child(args)) return *fake;
+    if (const auto fake = fake_bootstrap_job_child(args)) return *fake;
     if (const auto fake = fake_play_child(args)) return *fake;
     if (const auto fake = fake_unpacker(args)) return *fake;
     if (argc > 1 && std::wstring_view(argv[1]) == L"--import-cards") return card_import_cli(args.subspan(1));

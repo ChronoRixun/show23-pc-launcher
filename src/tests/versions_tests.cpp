@@ -58,6 +58,7 @@ namespace
         disk_view view;
         view.state.current = "0.1.3";
         view.state.previous = "0.1.2";
+        view.confirmed_folders = {view.state.current, view.state.previous};
         view.folders = {
             {"0.1.2", good("previous")}, {"0.1.3", good("current")},
             {"0.1.4-beta.2", good("older beta")}, {"0.1.4", good("stable")},
@@ -270,6 +271,8 @@ TEST(version_decisions_cover_recovery_request_arrival_and_launch_paths)
     CHECK(failed_commit(view).next == action::launch_current);
     view.state = *result.save;
     view.state.current.clear();
+    CHECK(failed_commit(view).folder == view.state.previous);
+    view.state.previous.clear();
     CHECK(failed_commit(view).next == action::dialog_write);
     view.state.starts = trial_starts;
     for (const std::string_view reason : {"could-not-start:2", "exit:0", "exit:1", "unconfirmed-timeout", ""})
@@ -390,15 +393,25 @@ TEST(bootstrap_prepare_repairs_and_consumes_requests_without_launching)
     CHECK(!fs::exists(layout / notice_file));
 
     const pointer prior{"0.1.3"};
-    const request incoming{"1234567890abcdef", "0.1.4", "retry"};
+    CHECK(write_confirmation(layout, prior.current, verify(layout / prior.current, check_mode::startup).fingerprint));
+    const request damaged{"1234567890abcdef", "0.1.4", "retry"};
     CHECK(write_record(layout / "pointer.bak", encode(prior)));
     top.write("show23-pc/versions/pointer.txt", "torn");
     top.write("show23-pc/versions/pointer.txt.tmp", "left over");
+    CHECK(write_record(layout / "request.txt", encode(damaged)));
+    std::tie(code, output) = prepare(top.root);
+    CHECK(code == 0 && output == "0.1.3\r\n");
+    const auto rejected = load_pointer(layout).value;
+    CHECK(rejected.current == prior.current && rejected.trial.empty() && rejected.last_request.empty());
+    CHECK(!fs::exists(layout / "request.txt"));
+
+    fs::copy(versions.complete("0.1.5"), layout / "0.1.5", fs::copy_options::recursive);
+    const request incoming{"1234567890abcdee", "0.1.5", "retry"};
     CHECK(write_record(layout / "request.txt", encode(incoming)));
     std::tie(code, output) = prepare(top.root);
     CHECK(code == 0 && output == "0.1.3\r\n");
     const auto consumed = load_pointer(layout).value;
-    CHECK(consumed.current == "0.1.3" && consumed.trial == "0.1.4" && consumed.starts == 0);
+    CHECK(consumed.current == "0.1.3" && consumed.trial == incoming.trial && consumed.starts == 0);
     CHECK(consumed.last_request == incoming.id && !fs::exists(layout / "request.txt"));
     CHECK(!fs::exists(layout / "pointer.txt.tmp"));
 
@@ -518,4 +531,83 @@ TEST(bootstrap_rebuilt_notice_requires_prior_record_history)
     CHECK(recovered == first);
     CHECK(parse_notices(read_record(layout / notice_file)) == 1);
     CHECK(load_pointer(layout).value.trial == "0.1.3");
+}
+
+TEST(version_confirmation_and_channel_records_validate_independently)
+{
+    fixture f;
+    const auto fingerprint = sha256("inventory");
+    CHECK(read_confirmation(f.root, "0.1.3").empty());
+    CHECK(write_confirmation(f.root, "0.1.3", fingerprint));
+    CHECK(read_confirmation(f.root, "0.1.3") == fingerprint);
+    CHECK(write_confirmation(f.root, "0.1.3", fingerprint));
+    CHECK(!write_confirmation(f.root, "../elsewhere", fingerprint));
+    CHECK(!write_confirmation(f.root, "0.1.3", "bad digest"));
+    f.write("confirmed/0.1.3.txt", seal("show23-pc confirmed 1\nfolder 0.1.4\ninventory " + fingerprint + "\n"));
+    CHECK(read_confirmation(f.root, "0.1.3").empty());
+    f.write("confirmed/0.1.3.txt", "torn");
+    CHECK(read_confirmation(f.root, "0.1.3").empty());
+    CHECK(!read_channel(f.root));
+    CHECK(write_channel(f.root, update_channel::stable));
+    CHECK(read_channel(f.root) == update_channel::stable);
+    f.write("channel.txt", "stabl");
+    CHECK(!read_channel(f.root));
+    CHECK(write_channel(f.root, update_channel::beta));
+    CHECK(read_channel(f.root) == update_channel::beta);
+}
+
+TEST(version_startup_hashes_same_size_launcher_and_cef_damage)
+{
+    fixture f;
+    const auto slot = f.complete("0.1.3");
+    auto manifest = *parse_inventory(read_record(slot / "version.txt"));
+    manifest.files.push_back({"cef/release/libcef.dll", sha256("cef"), 3});
+    f.write("0.1.3/cef/release/libcef.dll", "cef");
+    f.write("0.1.3/version.txt", encode(manifest));
+    CHECK(verify(slot, check_mode::startup));
+    f.write("0.1.3/cef/release/libcef.dll", "bad");
+    CHECK(verify(slot, check_mode::quick));
+    CHECK(verify(slot, check_mode::startup).bad_file == "cef/release/libcef.dll");
+    f.write("0.1.3/cef/release/libcef.dll", "cef");
+    f.write(fs::path("0.1.3") / launcher_exe, "bad");
+    CHECK(verify(slot, check_mode::quick));
+    CHECK(verify(slot, check_mode::startup).bad_file == launcher_exe);
+}
+
+TEST(version_decisions_require_confirmation_for_fallback_and_replaced_current)
+{
+    auto view = populated();
+    view.where = step::validate_names;
+    view.confirmed_folders.erase(view.state.current);
+    auto decision = decide(view);
+    CHECK(decision.save && decision.save->current == "0.1.2" && decision.save->trial == "0.1.3");
+    CHECK(failed_commit(view).next == action::launch_current && failed_commit(view).folder == "0.1.2");
+    view.confirmed_folders.clear();
+    decision = decide(view);
+    CHECK(decision.save && decision.save->current.empty() && decision.save->trial == "0.1.3");
+    CHECK(failed_commit(view).next == action::dialog_write);
+}
+
+TEST(version_stable_choice_filters_beta_and_budget_preserves_confirmed_start)
+{
+    auto view = populated();
+    view.folders.erase("0.1.4");
+    view.folders.erase("0.1.4~2");
+    view.where = step::arrival;
+    CHECK(decide(view).folder == "0.1.4-beta.2");
+    view.stable_only = true;
+    CHECK(decide(view).next == action::next);
+    view.where = step::process_request;
+    view.request_present = true;
+    view.incoming = request{"0000000000000001", "0.1.4-beta.2", "retry"};
+    CHECK(decide(view).invalid_request);
+    view.where = step::validate_names;
+    view.state.trial = view.incoming->trial;
+    CHECK(decide(view).save && decide(view).save->trial.empty());
+    view.stable_only = false;
+    view.where = step::choose;
+    view.launches = launch_limit - 1;
+    CHECK(decide(view).next == action::launch_current && !decide(view).save);
+    view.state.current.clear();
+    CHECK(decide(view).next == action::launch_trial);
 }

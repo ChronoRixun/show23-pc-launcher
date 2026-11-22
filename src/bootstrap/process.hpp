@@ -36,5 +36,7 @@ namespace bootstrap
         handle process, confirm, job;
         DWORD launch(const versions::fs::path& exe, const versions::fs::path& bootstrap,
             const std::string& folder, bool trial, const std::vector<std::wstring>& flags);
+        // Call after the bootstrap has durably promoted the confirmed trial.
+        bool release_trial_kill_on_close();
     };
 }

@@ -313,8 +313,7 @@ namespace launcher_update
             const auto runtime = parts::installed();
             if (!runtime.error.empty()) return runtime.error;
             const auto current = installed_version();
-            auto reuse = files::verified_slot(root, latest.version);
-            if (downgrade && reuse)
+            if (const auto reuse = downgrade ? files::verified_slot(root, latest.version) : std::nullopt)
             {
                 std::string parse_error;
                 const auto local = parts::parse(versions::read_record(root / *reuse / "manifests" / manifest_name, manifest_limit), parse_error);
@@ -389,18 +388,11 @@ namespace launcher_update
                 const auto metadata = download / manifest_name;
                 if (!versions::write_record(metadata, *receipt)) return "Could not stage the verified release manifest.";
 
-                std::string fingerprint;
-                if (reuse)
-                {
-                    const auto reused = versions::verify(root / *reuse, versions::check_mode::quick);
-                    if (reused) fingerprint = reused.fingerprint;
-                    else reuse.reset();
-                }
                 finish.lock();
                 if (!selected_locked(selection, downgrade)) return "The launcher update was cancelled.";
-                if (reuse && !downgrade && failed_slot(versions::load_pointer(root).value, *reuse, fingerprint))
-                    return "This launcher version failed to start. Use Try again to request another start.";
-                if (const auto error = partial.publish(metadata, reuse, folder); !error.empty()) return error;
+                const auto pointer = versions::load_pointer(root);
+                if (const auto error = partial.publish(metadata, downgrade ? nullptr : &pointer.value, folder); !error.empty())
+                    return error;
                 if (downgrade && !write_request_locked(folder, "switch-to-stable"))
                     return "Could not request the switch to Stable.";
             }

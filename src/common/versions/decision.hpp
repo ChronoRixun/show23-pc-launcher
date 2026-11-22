@@ -16,7 +16,9 @@ namespace versions
         step where{};
         std::map<std::string, verification, std::less<>> folders;
         std::optional<request> incoming;
-        bool request_present{}, prepare{};
+        bool request_present{}, prepare{}, stable_only{};
+        // Matching durable confirmation, in addition to the selected folder's startup check.
+        std::set<std::string, std::less<>> confirmed_folders;
         unsigned launches{};
         std::string last_reason;
         // Filled only after the newest quick candidate has been fully checked.

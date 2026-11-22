@@ -54,12 +54,24 @@ namespace bootstrap
                 notices = 0;
             }
 
-            void check(const std::string& folder)
+            void check(const std::string& folder, check_mode mode = check_mode::quick)
             {
-                if (folder.empty() || view.folders.contains(folder)) return;
+                if (folder.empty() || (mode == check_mode::quick && view.folders.contains(folder))) return;
                 const auto version = folder_version(folder);
                 if (newest.empty() || compare(version, newest) > 0) newest = version;
-                view.folders[folder] = verify(root / folder, check_mode::quick);
+                view.folders[folder] = verify(root / folder, mode);
+            }
+
+            void check_confirmed(const std::string& folder, bool is_current)
+            {
+                if (folder.empty()) return;
+                check(folder, check_mode::startup);
+                const auto& existing = view.folders.at(folder);
+                if (!existing) return;
+                if (read_confirmation(root, folder) == existing.fingerprint)
+                    view.confirmed_folders.insert(folder);
+                else if (is_current)
+                    check(folder, check_mode::full); // B3 may turn the replaced current into a trial.
             }
 
             bool save_pointer(const decision& selected) const
@@ -94,6 +106,11 @@ namespace bootstrap
                         if (view.where == step::choose && selected.next == action::launch_trial)
                             record_notice("counter-write");
                         const auto fallback = failed_commit(view);
+                        if (!fallback.folder.empty() && fallback.folder != view.state.current)
+                        {
+                            log(root, "using verified previous for this start");
+                            record_notice("fallback-write");
+                        }
                         if (fallback.next == action::dialog_write && !args.prepare) write_dialog(error);
                         return fallback;
                     }
@@ -150,6 +167,8 @@ namespace bootstrap
                 const auto loaded = load_pointer(root);
                 view.state = loaded.value;
                 view.folders.clear();
+                view.confirmed_folders.clear();
+                view.stable_only = read_channel(root) == update_channel::stable;
                 newest.clear();
                 view.last_reason.clear();
                 view.rejected_arrivals.clear();
@@ -164,7 +183,9 @@ namespace bootstrap
                     if (plain_path(root / name)) DeleteFileW((root / name).c_str());
                 if (!repair_pointer(root, loaded)) log(root, "could not repair the version record");
 
-                for (const auto* name : {&view.state.current, &view.state.previous, &view.state.trial}) check(*name);
+                check_confirmed(view.state.current, true);
+                check_confirmed(view.state.previous, false);
+                check(view.state.trial, check_mode::full);
                 view.where = step::validate_names;
                 if (auto selected = apply(decide(view)); selected.next != action::next) return selected;
 
@@ -173,7 +194,7 @@ namespace bootstrap
                 std::error_code error;
                 view.request_present = fs::exists(fs::symlink_status(request_path, error));
                 view.incoming = parse_request(bytes);
-                if (view.incoming) check(view.incoming->trial);
+                if (view.incoming) check(view.incoming->trial, check_mode::full);
                 view.where = step::process_request;
                 return apply(decide(view));
             }
@@ -204,6 +225,7 @@ namespace bootstrap
                     if (view.arrival_result)
                     {
                         view.last_reason.clear();
+                        view.folders[view.checked_arrival] = view.arrival_result;
                         return apply(decide(view));
                     }
                     log(root, selected.folder + ": damaged:" + view.arrival_result.bad_file);
@@ -254,7 +276,24 @@ namespace bootstrap
                     if (error) reason = "could-not-start:" + std::to_string(error);
                     else
                     {
-                        if (trial) fixture::kill_at(root.parent_path(), "B7-trial-running");
+#ifdef SHOW23_UPDATE_FIXTURE
+                        if (trial && fixture_run && fixture::setting("SHOW23_FIXTURE_KILL_AT") == "B7-trial-running")
+                        {
+                            // The app writes its trace only after taking the launcher mutex.
+                            const auto marker = " " + std::to_string(GetProcessId(app.process.get())) + "\n";
+                            const auto trace = root.parent_path() / "fixture-launches.txt";
+                            const auto deadline = GetTickCount64() + 4000;
+                            while (read_record(trace, 65536).find(marker) == std::string::npos)
+                            {
+                                if (GetTickCount64() >= deadline || WaitForSingleObject(app.process.get(), 10) != WAIT_TIMEOUT)
+                                {
+                                    log(root, "fixture trial did not reach the launcher mutex");
+                                    return 114;
+                                }
+                            }
+                            fixture::kill_at(root.parent_path(), "B7-trial-running");
+                        }
+#endif
                         const HANDLE waiting[]{app.confirm.get(), app.process.get()};
                         const auto timeout_ms = fixture_run ? 2000 : confirmation_timeout;
                         const auto event = WaitForMultipleObjects(2, waiting, FALSE, timeout_ms);
@@ -288,7 +327,8 @@ namespace bootstrap
                     }
                     if (!confirmed)
                     {
-                        const auto previous = !use_previous && view.launches < launch_limit
+                        const auto previous = !use_previous && folder != view.state.previous &&
+                            view.launches < launch_limit && view.confirmed_folders.contains(view.state.previous)
                             ? view.state.previous : std::string{};
                         const auto choice = dialog(root, L"show23-pc " + widen(folder_version(folder)) + L" did not open",
                             timeout ? (fixture_run ? L"No window after 2 seconds." : L"No window after 120 seconds.") : widen(reason),
@@ -325,14 +365,21 @@ namespace bootstrap
                     {
                         view.where = step::confirmed;
                         const auto promote = decide(view);
+                        const auto verified = verify(root / folder, check_mode::startup);
+                        const auto before = view.folders.find(folder);
+                        const bool same_bytes = verified && before != view.folders.end() &&
+                            before->second.fingerprint == verified.fingerprint;
                         bool recorded{};
-                        for (unsigned attempt = 0; promote.save && attempt < 3; ++attempt)
+                        for (unsigned attempt = 0; same_bytes && promote.save && attempt < 3; ++attempt)
                         {
-                            if (save_pointer(promote))
+                            if (write_confirmation(root, folder, verified.fingerprint) && save_pointer(promote))
                             {
                                 view.state = *promote.save;
+                                view.confirmed_folders.insert(folder);
                                 view.last_reason.clear();
                                 recorded = true;
+                                if (!app.release_trial_kill_on_close())
+                                    log(root, "could not release trial supervision for " + folder);
                                 break;
                             }
                             if (attempt != 2) Sleep(500);
@@ -419,7 +466,8 @@ namespace bootstrap
         utils::named_mutex bootstrap_lock(bootstrap_mutex_name);
         if (!bootstrap_lock.try_lock(app.args.update_restart ? 30s : 3s)) return already_open();
         utils::named_mutex child_lock(launcher_mutex_name);
-        if (!child_lock.try_lock()) return already_open();
+        // A killed bootstrap closes its trial job; let the OS finish releasing the app mutex.
+        if (!child_lock.try_lock(3s)) return already_open();
         child_lock.unlock();
 
         if (!plain_path(app.root))

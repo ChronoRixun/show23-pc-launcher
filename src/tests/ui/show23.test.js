@@ -1001,3 +1001,10 @@ test('Home keeps a fresh runtime read-only until Play', async () => {
     await view.clock.advance(0);
     assert.ok(view.requests.some(item => item.command === 'play-show23'));
 });
+
+test('Home explains a confirmed fallback when a version record could not be written', async () => {
+    const view = open({ 'get-startup': { notices: 'fallback-write\n' } });
+    await view.clock.advance(0);
+    assert.match(view.id('startup-notice').textContent, /previous confirmed version/);
+    assert.match(view.id('startup-notice').textContent, /try again next time/);
+});

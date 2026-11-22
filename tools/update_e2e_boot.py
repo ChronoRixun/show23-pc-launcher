@@ -73,6 +73,13 @@ class Fixture:
 
     def seed(self, **fields):
         state = pointer(**fields)
+        for field in ("current", "previous"):
+            folder = fields.get(field, "-")
+            inventory = self.versions / folder / "version.txt"
+            if inventory.is_file():
+                fingerprint = inventory.read_text(encoding="ascii").splitlines()[-1][4:]
+                self.write(self.versions / "confirmed" / (folder + ".txt"), sealed(
+                    f"show23-pc confirmed 1\nfolder {folder}\ninventory {fingerprint}\n"))
         self.primary.write_bytes(state)
         self.backup.write_bytes(state)
         return state

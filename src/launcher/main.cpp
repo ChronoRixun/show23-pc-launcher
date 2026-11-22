@@ -238,6 +238,7 @@ namespace
         if (!versioned_start::confirm()) return 2;
         while (versioned_start::status() == versioned_start::gate::waiting) Sleep(25);
         if (!versioned_start::unlocked()) return 3;
+        release_source::sync_bootstrap_channel();
         launcher_update::cleanup();
 
         utils::io::write_file(data / ("fixture-confirmed-" + current + ".txt"), layout.folder);

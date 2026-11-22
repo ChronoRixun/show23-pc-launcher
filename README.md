@@ -60,7 +60,7 @@ Inside your install folder:
 | Imported special cards | `data\import-cache\` |
 | Server, emulator and card-import logs | `data\logs\` |
 
-Back up the whole `data\profiles` folder to keep your progress. The launcher's own settings and logs are in the `show23-pc\data\` folder next to `show23-pc.exe`; **Support → Open logs folder** opens its logs.
+Back up the whole `data\profiles` folder to keep your progress. Next to `show23-pc.exe`, the launcher keeps its settings and embedded browser logs under `show23-pc\user\`. **Support → Open logs folder** opens `show23-pc\data\logs\`, which contains the launcher log.
 
 ### Known limits
 
@@ -75,7 +75,7 @@ Back up the whole `data\profiles` folder to keep your progress. The launcher's o
 
 ### Reporting problems
 
-Open an issue on [GitHub](https://github.com/ChronoRixun/show23-pc-launcher/issues). Say what you did and what happened, paste the text from **Support → Copy diagnostics** (read it first) and attach the newest logs from `data\logs\` in your install. Please never post game files, keys, accounts or links to them.
+Open an issue on [GitHub](https://github.com/ChronoRixun/show23-pc-launcher/issues). Say what you did and what happened, paste the text from **Support → Copy diagnostics** (read it first) and attach the newest logs from `data\logs\` in your install. For version selection and startup issues, also attach `show23-pc\versions\bootstrap.log` from the portable launcher folder. Please never post game files, keys, accounts or links to them.
 
 ## For builders
 

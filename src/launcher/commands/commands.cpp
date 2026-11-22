@@ -942,6 +942,7 @@ namespace commands
             {
                 static const auto started = []
                 {
+                    release_source::sync_bootstrap_channel();
                     launcher_update::cleanup();
                     if (utils::flags::has_flag("-trial"))
                         try { show23::update_shortcuts(false); } catch (...) {}

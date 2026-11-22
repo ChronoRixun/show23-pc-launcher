@@ -303,6 +303,49 @@ namespace versions
         return text;
     }
 
+    std::optional<update_channel> read_channel(const fs::path& root)
+    {
+        const auto value = read_record(root / "channel.txt", 16);
+        if (value == "stable\n") return update_channel::stable;
+        if (value == "beta\n") return update_channel::beta;
+        return {};
+    }
+
+    bool write_channel(const fs::path& root, update_channel value)
+    {
+        return read_channel(root) == value ||
+            write_record(root / "channel.txt", value == update_channel::stable ? "stable\n" : "beta\n");
+    }
+
+    std::string read_confirmation(const fs::path& root, std::string_view folder)
+    {
+        if (!valid_folder(folder)) return {};
+        const auto data = read_record(root / "confirmed" / (std::string(folder) + ".txt"), 512);
+        const auto confirm = parse_text(data, "show23-pc confirmed 1", 512);
+        if (!confirm || confirm->lines.size() != 3 ||
+            field(confirm->lines[1], "folder") != folder) return {};
+        const auto fingerprint = field(confirm->lines[2], "inventory");
+        return fingerprint && hex(*fingerprint, 64) ? std::string(*fingerprint) : std::string{};
+    }
+
+    bool write_confirmation(const fs::path& root, std::string_view folder, std::string_view fingerprint)
+    {
+        if (!valid_folder(folder) || !hex(fingerprint, 64)) return false;
+        if (read_confirmation(root, folder) == fingerprint) return true;
+        const auto base = root / "confirmed";
+        if (!plain_path(base, true)) return false;
+        std::error_code error;
+        fs::create_directory(base, error);
+        if (error || !fs::is_directory(base, error) || error) return false;
+        const auto record = base / (std::string(folder) + ".txt");
+        auto stale = record;
+        stale += ".tmp";
+        if (plain_path(stale) && fs::is_regular_file(stale, error) && !error) fs::remove(stale, error);
+        if (error) return false;
+        return write_record(record, seal("show23-pc confirmed 1\nfolder " + std::string(folder) +
+            "\ninventory " + std::string(fingerprint) + "\n"));
+    }
+
     loaded_pointer select_pointer(const std::optional<pointer>& primary, const std::optional<pointer>& backup)
     {
         if (primary) return {*primary, pointer_source::primary, false, !backup};
