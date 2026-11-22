@@ -4,7 +4,7 @@
 
 A Windows launcher for playing your own copy of MLB The Show 23 (PS4, `CUSA35521`) on PC. It sets the game up from your own game files, starts the companion emulator build and a small local server that stands in for the retired Diamond Dynasty online service, and can import the special cards from the publisher's public website on request. The launcher never downloads or distributes game files.
 
-**Status: 0.1.0, the first release.** Setup, Play, Diamond Dynasty against the local server and the optional special-card import all work. Read [Known limits](#known-limits) before you start.
+**Status: 0.1.1.** Setup, Play, Diamond Dynasty against the local server and the optional special-card import all work. Read [Known limits](#known-limits) before you start.
 
 ## For players
 

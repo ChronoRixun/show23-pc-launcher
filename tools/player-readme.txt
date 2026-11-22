@@ -1,4 +1,4 @@
-show23-pc 0.1.0
+show23-pc @VERSION@
 
 Play your own copy of MLB The Show 23 (PS4, CUSA35521) on Windows, with Diamond Dynasty kept alive by a small server that runs on your own PC.
 

@@ -203,9 +203,11 @@ try {
     $source = "https://github.com/ChronoRixun/show23-pc-emulator (branch release, commit $EmulatorCommit)"
     Save-Text (Join-Path $licenses 'emulator\SOURCE.txt') "$source`n"
     $readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'player-readme.txt') -Raw -Encoding UTF8
-    Save-Text (Join-Path $payload 'README.txt') ($readme.Replace('@EMULATOR_SOURCE@', $source))
+    Save-Text (Join-Path $payload 'README.txt') ($readme.Replace('@EMULATOR_SOURCE@', $source).Replace('@VERSION@', $Version))
     $manual = Join-Path $payload 'manual'
     Copy-Tree (Join-Path $PSScriptRoot 'manual') $manual
+    $manualReadme = Join-Path $manual 'README.txt'
+    Save-Text $manualReadme ((Get-Content -LiteralPath $manualReadme -Raw -Encoding UTF8).Replace('@VERSION@', $Version))
     foreach ($script in 'setup.sh', 'play.sh') {
         $path = Join-Path $manual $script
         $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
