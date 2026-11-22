@@ -93,6 +93,19 @@ namespace parts
         return runtime.root / name(part);
     }
 
+    bool has_bundled_part(const installed_runtime& bundle, const id part)
+    {
+        if (part == id::launcher || bundle.root.empty() || !bundle.error.empty()) return false;
+        const auto& manifest = bundle.manifests[index(part)];
+        if (!manifest || manifest->files.empty()) return false;
+        const auto folder = component_folder(bundle, part);
+        return std::ranges::all_of(manifest->files, [&](const auto& file)
+        {
+            const auto input = show23::input_paths::inspect(folder / file.path);
+            return input.present && !input.directory && input.error == show23::input_paths::path_error::none;
+        });
+    }
+
     bool verify_card_import_runtime(const installed_runtime& runtime, const std::string_view launcher_version, std::string& message)
     {
         if (!verify_runtime(runtime, launcher_version, message)) return false;

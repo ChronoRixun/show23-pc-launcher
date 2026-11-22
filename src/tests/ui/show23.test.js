@@ -834,3 +834,44 @@ test('Launcher shortcuts action reports a partial update', async () => {
     await view.clock.advance(0);
     assert.deepEqual(view.toasts.at(-1), ['Updated the desktop shortcut. Could not update the Start menu shortcut.', 'error']);
 });
+
+
+test('Bundled parts explain updates only when their own channel is unpublished', async () => {
+    const labels = {
+        en: ['Included with the launcher', 'Bundled in the launcher download.'],
+        fr: ['Inclus avec le lanceur', 'Fait partie du téléchargement du lanceur.'],
+        es: ['Incluido con el iniciador', 'Incluido en la descarga del iniciador.'],
+        ru: ['Входит в комплект лаунчера', 'Входит в загружаемый комплект лаунчера.']
+    };
+    for (const [language, [label, hint]] of Object.entries(labels)) {
+        const view = open({
+            'get-settings': { language, offline: false, channel: 'stable' },
+            'get-parts': { parts: [
+                { part: 'emulator', version: '0.1.0', bundled: true, state: 'unpublished' },
+                { part: 'server', version: '0.1.0', bundled: true, state: 'available', availableVersion: '0.1.3' },
+                { part: 'profile', version: '0.1.0', bundled: true, state: 'error', status: 'Bad manifest' }
+            ] }
+        });
+        await view.clock.advance(0);
+        view.id('settings').click();
+        await view.clock.advance(0);
+        const cell = view.id('part-status-emulator');
+        assert.equal(cell.textContent, label);
+        assert.ok(cell.querySelector('.dot.ok'));
+        assert.equal(cell.querySelector('.status-text').getAttribute('title'), hint);
+        assert.match(view.id('part-status-server').textContent, /0\.1\.3/);
+        assert.equal(view.id('part-status-profile').textContent, 'Bad manifest');
+        assert.ok(view.id('part-status-profile').querySelector('.dot.bad'));
+    }
+});
+
+test('Unbundled or offline parts keep their existing status', async () => {
+    for (const [offline, expected] of [[false, 'No release published yet'], [true, 'Offline mode']]) {
+        const view = open({
+            'get-settings': { language: 'en', offline },
+            'get-parts': { parts: [{ part: 'emulator', state: 'unpublished', bundled: offline }] }
+        });
+        await view.clock.advance(0);
+        assert.equal(view.id('part-status-emulator').textContent, expected);
+    }
+});

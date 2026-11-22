@@ -414,7 +414,7 @@ namespace release_channel
         return result;
     }
 
-    std::vector<release> parse_releases_json(const std::string_view json, std::string& error, const std::string_view tag_prefix)
+    std::vector<release> parse_releases_json(const std::string_view json, std::string& error, const std::string_view tag_prefix, const bool strict)
     {
         rapidjson::Document document;
         document.Parse(json.data(), json.size());
@@ -426,9 +426,16 @@ namespace release_channel
         std::vector<release> releases;
         for (const auto& value : document.GetArray())
         {
+            const auto tag = json_string(value, "tag_name");
+            if (strict && !tag.empty() && !tag.starts_with(tag_prefix)) continue;
             if (auto entry = release_from_value(value, tag_prefix))
             {
                 releases.push_back(std::move(*entry));
+            }
+            else if (strict)
+            {
+                error = "The release list contains an invalid release.";
+                return {};
             }
         }
         return releases;

@@ -284,7 +284,7 @@ namespace commands
             }
             else if (!outcome.error.empty())
             {
-                state = outcome.error.starts_with("No release") ? "unpublished" : "error";
+                state = outcome.unpublished ? "unpublished" : "error";
             }
             row.AddMember("state", rapidjson::StringRef(state), allocator);
             row.AddMember("status", json(outcome.error, allocator), allocator);
@@ -487,6 +487,7 @@ namespace commands
             ui.add_command("get-parts", [](const auto&, rapidjson::Document& response)
             {
                 const auto runtime = parts::installed();
+                const auto bundle = parts::read_runtime(utils::properties::get_appdata_path());
                 std::lock_guard lock(updates.mutex);
                 response.SetObject();
                 auto& a = response.GetAllocator();
@@ -504,7 +505,17 @@ namespace commands
                     row.AddMember("part", rapidjson::StringRef(parts::name(part)), a);
                     row.AddMember("version", json(version, a), a);
                     row.AddMember("prerelease", release_channel::is_prerelease(version), a);
-                    if (index) write_part_release(row, a, updates.releases[index - 1], version, updates.busy);
+                    if (index)
+                    {
+                        auto outcome = updates.releases[index - 1];
+                        if (outcome.unpublished && (!runtime.error.empty() || !bundle.error.empty()))
+                        {
+                            outcome.unpublished = false;
+                            outcome.error = runtime.error.empty() ? bundle.error : runtime.error;
+                        }
+                        row.AddMember("bundled", outcome.unpublished && parts::has_bundled_part(bundle, part), a);
+                        write_part_release(row, a, outcome, version, updates.busy);
+                    }
                     rows.PushBack(row, a);
                 }
                 response.AddMember("parts", rows, a);

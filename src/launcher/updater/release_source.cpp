@@ -74,7 +74,7 @@ namespace release_source
 
     release_channel::outcome resolve(const std::string& repo, const channel value, const std::vector<std::string>& required, const bool force)
     {
-        auto outcome = shared().resolve(repo, value, required, force, utils::flags::has_flag("offline"));
+        auto outcome = shared().resolve(repo, value, required, force, utils::flags::has_flag("offline"), repo == emulator_repo);
         if (!outcome.chosen || outcome.from_cache)
         {
             utils::logger::write("release channel: {} ({}): {}{}", repo, release_channel::channel_name(value), outcome.error,
@@ -93,18 +93,8 @@ namespace release_source
         std::array<release_channel::outcome, 2> outcomes;
         if (utils::flags::has_flag("offline")) return outcomes;
         const auto reply = get(api_base() + "/repos/" + parts_repo + "/releases?per_page=30");
-        const auto failure = release_resolver::describe_failure(reply);
-        constexpr std::array prefixes{"server-", "profile-"};
-        constexpr std::array manifests{"server.json", "profile.json"};
-        for (std::size_t i = 0; i < outcomes.size(); ++i)
-        {
-            auto& outcome = outcomes[i];
-            outcome.error = failure;
-            if (!failure.empty()) continue;
-            const auto releases = release_channel::parse_releases_json(reply.body, outcome.error, prefixes[i]);
-            outcome.chosen = release_channel::pick(selected, releases, {manifests[i], "SHA256SUMS.txt"});
-            if (!outcome.chosen && outcome.error.empty()) outcome.error = "No release has been published yet.";
-        }
+        outcomes[0] = release_resolver::select_from_feed(reply, selected, {"server.json", "SHA256SUMS.txt"}, "server-");
+        outcomes[1] = release_resolver::select_from_feed(reply, selected, {"profile.json", "SHA256SUMS.txt"}, "profile-");
         return outcomes;
     }
 

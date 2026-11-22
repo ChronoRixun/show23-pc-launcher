@@ -100,7 +100,8 @@ namespace release_channel
     // whose tag isn't a version is left out (and a list goes on with the next one); nullopt / an
     // empty list with `error` set when the answer isn't one at all.
     std::optional<release> parse_release_json(std::string_view json, std::string& error);
-    std::vector<release> parse_releases_json(std::string_view json, std::string& error, std::string_view tag_prefix = {});
+    std::vector<release> parse_releases_json(std::string_view json, std::string& error, std::string_view tag_prefix = {},
+                                             bool strict = false);
 
     // Beta's pick from a list: the highest version that is not a draft and has every asset in
     // `required` (a release still uploading its files isn't one yet; "{version}" in a name stands for
@@ -128,6 +129,7 @@ namespace release_channel
         std::optional<release> chosen;
         bool from_cache{}; // GitHub couldn't be asked: the last release resolved for this channel
         std::string error; // why GitHub couldn't be asked (also set with from_cache, for the page)
+        bool unpublished{};
     };
 
     // What a resolution ends with: the fetched release, else the cached one (saying why), else the

@@ -113,3 +113,24 @@ TEST(bundled_runtime_requires_the_card_importer_in_the_manifest)
     CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
     CHECK(!fs::exists(f.install / "manifests/runtime.txt"));
 }
+
+TEST(bundled_part_badge_requires_manifest_and_regular_listed_files)
+{
+    fixture f;
+    const auto server = parts::id::server;
+    CHECK(parts::has_bundled_part(parts::read_runtime(f.bundle), server));
+
+    const auto script = f.bundle / "runtime/0.1.0/server/olserver.py";
+    CHECK(fs::remove(script));
+    CHECK(!parts::has_bundled_part(parts::read_runtime(f.bundle), server));
+
+    CHECK(fs::create_directory(script));
+    CHECK(!parts::has_bundled_part(parts::read_runtime(f.bundle), server));
+    CHECK(fs::remove(script));
+    write(script, "abc");
+
+    write(f.bundle / "manifests/0.1.0/profile.json", "malformed");
+    const auto invalid = parts::read_runtime(f.bundle);
+    CHECK(!parts::has_bundled_part(invalid, parts::id::profile));
+    CHECK(!parts::has_bundled_part(invalid, server));
+}

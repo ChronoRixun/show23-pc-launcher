@@ -48,13 +48,16 @@ namespace release_resolver
     // Why GitHub's answer can't be used, for the player ("" when it can: HTTP 200).
     std::string describe_failure(const http_answer& answer);
 
+    release_channel::outcome select_from_feed(const http_answer& answer, release_channel::channel channel,
+        const std::vector<std::string>& required, std::string_view tag_prefix = {}, bool strict = true);
+
     class resolver
     {
     public:
         explicit resolver(io io);
 
         release_channel::outcome resolve(const std::string& repo, release_channel::channel channel, const std::vector<std::string>& required,
-                                         bool force = false, bool cache_only = false);
+                                         bool force = false, bool cache_only = false, bool strict = false);
 
         // The last outcome for `repo` and `channel` this run, without asking GitHub.
         std::optional<release_channel::outcome> last(const std::string& repo, release_channel::channel channel);
@@ -69,8 +72,8 @@ namespace release_resolver
             std::chrono::steady_clock::time_point at;
         };
 
-        std::optional<release_channel::release> fetch(const std::string& repo, release_channel::channel channel,
-                                                      const std::vector<std::string>& required, std::string& error) const;
+        release_channel::outcome fetch(const std::string& repo, release_channel::channel channel,
+                                                      const std::vector<std::string>& required, bool strict) const;
 
         io io_;
         std::mutex mutex_;

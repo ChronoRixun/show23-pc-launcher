@@ -47,49 +47,69 @@ namespace release_resolver
     {
     }
 
-    std::optional<release_channel::release> resolver::fetch(const std::string& repo, const channel value, const std::vector<std::string>& required,
-                                                            std::string& error) const
+    release_channel::outcome select_from_feed(const http_answer& answer, const channel value,
+        const std::vector<std::string>& required, std::string_view tag_prefix, bool strict)
+    {
+        release_channel::outcome result;
+        result.error = describe_failure(answer);
+        if (!result.error.empty())
+        {
+            result.unpublished = answer.reached && answer.status == 404;
+            return result;
+        }
+        const auto releases = release_channel::parse_releases_json(answer.body, result.error, tag_prefix);
+        if (!result.error.empty()) return result;
+        result.chosen = release_channel::pick(value, releases, required);
+        if (result.chosen) return result;
+
+        if (strict)
+        {
+            // Keep the existing selection when it finds a usable release. Before
+            // treating an empty result as unpublished, check that the feed is sound.
+            release_channel::parse_releases_json(answer.body, result.error, tag_prefix, true);
+            if (!result.error.empty()) return result;
+        }
+        result.unpublished = !release_channel::pick(value, releases, {});
+        result.error = result.unpublished ? "No release has been published yet." :
+            "A release has been published, but its required files are missing.";
+        return result;
+    }
+
+    release_channel::outcome resolver::fetch(const std::string& repo, const channel value,
+        const std::vector<std::string>& required, bool strict) const
     {
         const auto base = this->io_.api_base() + "/repos/" + repo + "/releases";
         const auto reply = this->io_.get(value == channel::stable ? base + "/latest" : base + "?per_page=30");
-        error = describe_failure(reply);
-        if (!error.empty())
+        if (value == channel::beta)
         {
-            return std::nullopt;
+            auto result = select_from_feed(reply, value, required, {}, strict);
+            if (!strict && (reply.reached && reply.status == 200) && !result.chosen &&
+                (result.unpublished || result.error == "A release has been published, but its required files are missing."))
+                result.error = "No release has been published yet with all its files.";
+            return result;
         }
 
-        if (value == channel::stable)
+        release_channel::outcome result;
+        result.error = describe_failure(reply);
+        if (!result.error.empty())
         {
-            auto latest = release_channel::parse_release_json(reply.body, error);
-            if (!latest)
-            {
-                return std::nullopt;
-            }
-            if (latest->draft || latest->prerelease || release_channel::is_prerelease(latest->version) ||
-                !release_channel::has_files(*latest, required))
-            {
-                // A release still being published (its files upload after it is created).
-                error = "The latest release (" + latest->version + ") does not have all its files yet.";
-                return std::nullopt;
-            }
-            return latest;
+            result.unpublished = reply.reached && reply.status == 404;
+            return result;
         }
-
-        const auto releases = release_channel::parse_releases_json(reply.body, error);
-        if (!error.empty())
+        auto latest = release_channel::parse_release_json(reply.body, result.error);
+        if (!latest) return result;
+        if (latest->draft || latest->prerelease || release_channel::is_prerelease(latest->version) ||
+            !release_channel::has_files(*latest, required))
         {
-            return std::nullopt;
+            result.error = "The latest release (" + latest->version + ") does not have all its files yet.";
+            return result;
         }
-        auto chosen = release_channel::pick(value, releases, required);
-        if (!chosen)
-        {
-            error = "No release has been published yet with all its files.";
-        }
-        return chosen;
+        result.chosen = std::move(latest);
+        return result;
     }
 
     release_channel::outcome resolver::resolve(const std::string& repo, const channel value, const std::vector<std::string>& required,
-                                               const bool force, const bool cache_only)
+                                               const bool force, const bool cache_only, const bool strict)
     {
         const auto id = answer_key(repo, value);
         std::uint64_t generation;
@@ -103,10 +123,10 @@ namespace release_resolver
             }
         }
 
-        std::string error = cache_only ? "Offline mode: using the last release checked for this channel." : std::string{};
-        auto fetched = cache_only ? std::optional<release_channel::release>{} : this->fetch(repo, value, required, error);
+        auto fetched = cache_only ? release_channel::outcome{} : this->fetch(repo, value, required, strict);
+        if (cache_only) fetched.error = "Offline mode: using the last release checked for this channel.";
         std::optional<release_channel::release> cached;
-        if (const auto stored = !fetched ? this->io_.load(cache_key(repo, value)) : std::nullopt)
+        if (const auto stored = !fetched.chosen ? this->io_.load(cache_key(repo, value)) : std::nullopt)
         {
             // Only a choice that still has the files asked for (a cache from an older launcher may not).
             cached = release_channel::release_from_json(*stored);
@@ -115,7 +135,8 @@ namespace release_resolver
                 cached.reset();
             }
         }
-        auto outcome = release_channel::settle(std::move(fetched), error, cached);
+        auto outcome = release_channel::settle(std::move(fetched.chosen), fetched.error, cached);
+        outcome.unpublished = !outcome.chosen && fetched.unpublished;
 
         std::lock_guard lock(this->mutex_);
         if (generation == this->generation_)

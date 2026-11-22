@@ -544,7 +544,10 @@
         const own = item.part === 'launcher';
         const info = own ? launcher : item;
         const noRelease = /^(No release has been published|No release with all its files has been published)/i;
-        if (info?.state === 'unpublished' || noRelease.test(info?.error || info?.status || '')) {
+        if (!own && info.state === 'unpublished' && item.bundled) {
+            return { tone: 'ok', text: t('settings.included'), hint: t('settings.bundledDownload') };
+        }
+        if (info?.state === 'unpublished' || (own && noRelease.test(info?.error || info?.status || ''))) {
             return { tone: '', text: t('settings.noRelease') };
         }
         switch (info?.state) {
@@ -557,7 +560,7 @@
                 return { tone: 'accent', text: t('settings.checking') };
         }
         const text = own ? window.LauncherUpdate.statusLine(launcher) : item.status;
-        return { text: text || t('settings.notChecked'), tone: '' };
+        return { text: text || t('settings.notChecked'), tone: info?.state === 'error' ? 'bad' : '' };
     }
 
     function paintPartStatus(target, item) {
@@ -566,7 +569,9 @@
         const dot = make('i', 'dot ' + spec.tone);
         dot.setAttribute('aria-hidden', 'true');
         target.appendChild(dot);
-        target.appendChild(make('span', 'status-text', spec.text));
+        const text = make('span', 'status-text', spec.text);
+        if (spec.hint) text.setAttribute('title', spec.hint);
+        target.appendChild(text);
     }
 
     function currentPart(name) {

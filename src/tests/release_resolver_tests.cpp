@@ -290,3 +290,38 @@ TEST(a_private_or_unpublished_repository_stops_after_one_request)
     CHECK(!found.chosen && found.error == "No release has been published yet.");
     CHECK(github.asked.size() == 1);
 }
+
+
+TEST(part_release_feed_distinguishes_missing_publications_and_errors)
+{
+    using release_resolver::select_from_feed;
+    const std::vector<std::string> required{"server.json", "SHA256SUMS.txt"};
+    const auto choose = [&](const http_answer& answer)
+    {
+        return select_from_feed(answer, channel::stable, required, "server-");
+    };
+    CHECK(choose(ok("[]")).unpublished);
+    CHECK(choose({true, {}, 404, {}}).unpublished);
+    CHECK(choose(ok("[" + release_json("profile-v1.0.0", false) + "]")).unpublished);
+    CHECK(choose(ok("[" + release_json("server-v1.0.0-beta.1", true) + "]")).unpublished);
+    CHECK(!choose({false, "no connection", 0, {}}).unpublished);
+    CHECK(!choose(ok("{broken")).unpublished);
+    CHECK(!choose(ok("[{}]")).unpublished);
+    CHECK(!choose(ok("[" + release_json("server-invalid", false) + "]")).unpublished);
+
+    const auto incomplete = choose(ok("[" + release_json("server-v1.0.0", false, {"server.json"}) + "]"));
+    CHECK(!incomplete.chosen && !incomplete.unpublished && !incomplete.error.empty());
+    const auto published = choose(ok("[" + release_json("server-v1.0.0", false, required) + "]"));
+    CHECK(published.chosen && !published.unpublished && published.error.empty());
+}
+
+TEST(emulator_beta_feed_reports_unpublished_only_without_a_channel_release)
+{
+    fake github;
+    release_resolver::resolver resolver{github.io()};
+    github.list(ok("[]"));
+    CHECK(resolver.resolve(test_repo, channel::beta, test_files).unpublished);
+    github.list(ok("[" + release_json("v1.0.1-beta.1", true, {}) + "]"));
+    const auto incomplete = resolver.resolve(test_repo, channel::beta, test_files, true, false, true);
+    CHECK(!incomplete.chosen && !incomplete.unpublished && !incomplete.error.empty());
+}

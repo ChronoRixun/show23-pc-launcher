@@ -108,7 +108,7 @@ The output in `dist/` is `show23-pc-0.1.0-win64-portable.zip`, `launcher.json` a
 
 ### Update channels
 
-Stable is the default and selects final releases. Beta includes pre-releases. Settings → Updates shows the installed version for the launcher, emulator, server and profile. A pre-release is marked Beta. The launcher asks before switching a portable Beta back to an older Stable release. Keep the beta leaves it installed. Tagged Release builds in installed mode can open the release page for a manual update. When published releases are unavailable the update check reports that fact and stops. Release assets and compatibility rules are documented in [Release manifests](docs/release-manifest.md).
+Stable is the default and selects final releases. Beta includes pre-releases. Settings → Updates shows the installed version for the launcher, emulator, server and profile. A pre-release is marked Beta. The launcher asks before switching a portable Beta back to an older Stable release. Keep the beta leaves it installed. Tagged Release builds in installed mode can open the release page for a manual update. Parts without a separate release are marked **Included with the launcher** when bundled. The Installed column shows the version active in the game install. The in-app updater replaces the launcher files. A full ZIP includes the runtime; the launcher uses that bundle when staging a runtime for a game install without a working one. Release assets and compatibility rules are documented in [Release manifests](docs/release-manifest.md).
 
 ## Privacy
 
