@@ -2,6 +2,7 @@
 #include "release_source.hpp"
 #include "versioned_start.hpp"
 #include <versions/records.hpp>
+#include <versions/update_fixture.hpp>
 #include "release_resolver.hpp"
 
 #include <utils/http.hpp>
@@ -15,17 +16,13 @@ namespace release_source
     namespace
     {
         using release_channel::channel;
-        std::mutex channel_mutex;
-
-        bool write_bootstrap_channel(channel value)
+        bool write_bootstrap_channel(const std::filesystem::path& root, channel value)
         {
-            const auto& layout = versioned_start::layout();
-            if (!layout) return true;
-            const auto temp = layout.versions / "channel.txt.tmp";
+            const auto temp = root / "channel.txt.tmp";
             std::error_code error;
             if (versions::plain_path(temp) && std::filesystem::is_regular_file(temp, error) && !error)
                 std::filesystem::remove(temp, error);
-            return !error && versions::write_channel(layout.versions, value == channel::stable ?
+            return !error && versions::write_channel(root, value == channel::stable ?
                 versions::update_channel::stable : versions::update_channel::beta);
         }
 
@@ -81,34 +78,28 @@ namespace release_source
 
     channel current_channel()
     {
-        return release_channel::parse_channel(utils::properties::load(property_keys::UPDATE_CHANNEL).value_or(""));
-    }
-
-    void sync_bootstrap_channel()
-    {
-        std::lock_guard lock(channel_mutex);
-        if (!write_bootstrap_channel(current_channel()))
-            utils::logger::write("could not save the bootstrap update channel");
+        const auto& layout = versioned_start::layout();
+        if (!layout)
+            return release_channel::parse_channel(utils::properties::load(property_keys::UPDATE_CHANNEL).value_or(""));
+        const auto choice = versions::read_channel(layout.versions);
+        if (choice) return *choice == versions::update_channel::beta ? channel::beta : channel::stable;
+        return release_channel::is_prerelease(versions::folder_version(layout.folder)) ? channel::beta : channel::stable;
     }
 
     void set_channel(const channel value)
     {
-        std::lock_guard lock(channel_mutex);
         const auto previous = current_channel();
-        // Make a Stable selection durable before there is any chance of another start.
-        if (value == channel::stable && !write_bootstrap_channel(value)) return;
-        try
+        const auto& layout = versioned_start::layout();
+        if (layout)
+        {
+            if (!write_bootstrap_channel(layout.versions, value)) return;
+            versions::fixture::kill_at(layout.versions.parent_path(), "channel-written");
+        }
+        else
         {
             utils::properties::store(property_keys::UPDATE_CHANNEL, release_channel::channel_name(value));
-            if (current_channel() == value && write_bootstrap_channel(value))
-            {
-                if (previous != value) shared().invalidate();
-                return;
-            }
         }
-        catch (const std::exception&) {}
-        utils::properties::store(property_keys::UPDATE_CHANNEL, release_channel::channel_name(previous));
-        write_bootstrap_channel(previous);
+        if (previous != value) shared().invalidate();
     }
 
     release_channel::outcome resolve(const std::string& repo, const channel value, const std::vector<std::string>& required, const bool force)

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import shutil
 import subprocess
 import sys
 import time
@@ -42,6 +43,31 @@ else:
     temporary = root / "manual-started.tmp"
     temporary.write_text(json.dumps({"pid": os.getpid(), "child": child.pid, "args": sys.argv[1:]}))
     temporary.replace(root / "manual-started.json")
+time.sleep(90)
+'''
+LOCK_SCRIPT = b'''import ctypes
+from ctypes import wintypes
+from pathlib import Path
+import sys
+import time
+
+kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                               wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+kernel.CreateFileW.restype = wintypes.HANDLE
+handle = kernel.CreateFileW(__file__, 0x80000000, 1, None, 3, 0, None)
+if handle == ctypes.c_void_p(-1).value:
+    raise ctypes.WinError(ctypes.get_last_error())
+Path(sys.argv[1]).write_text("locked")
+time.sleep(90)
+'''
+LOAD_SCRIPT = '''import ctypes
+from pathlib import Path
+import sys
+import time
+
+dll = ctypes.WinDLL(sys.argv[1])
+Path(sys.argv[2]).write_text("loaded")
 time.sleep(90)
 '''
 
@@ -90,7 +116,8 @@ def python_files():
 def runtime_files(play_python=None):
     files = {"manifests/runtime.txt": MARKER}
     payload = {
-        "emulator": {"shadPS4.exe": b"fixture emulator, deliberately not executable\n"},
+        "emulator": {"shadPS4.exe": b"fixture emulator, deliberately not executable\n",
+                     "support.dll": b"fixture support DLL, deliberately not loadable\n"},
         "server": {"olserver.py": PROCESS_SCRIPT if play_python else b"# frozen fixture\n",
                    "roster_decode.py": b"# roster\n", "card_import.py": b"# cards\n",
                    "tables/ol-messages.csv": b"code,message\n", "replies/fixture.xml": b"<reply />\n"},
@@ -154,17 +181,16 @@ class Fixture:
         assert set(state) >= {"ok", "ready", "fresh", "repairable", "inUse", "message"}, state
         return state
 
-    def compare_live(self):
+    def compare_live(self, extra_runtime=None, expected_manifests=None):
         assert self.marker.read_bytes() == MARKER
-        assert inventory(self.runtime_slot) == inventory(self.slot / "runtime" / RUNTIME)
-        assert inventory(self.manifest_slot) == inventory(self.slot / "manifests" / RUNTIME)
+        assert inventory(self.runtime_slot) == (inventory(self.slot / "runtime" / RUNTIME) | (extra_runtime or {}))
+        assert inventory(self.manifest_slot) == (expected_manifests if expected_manifests is not None else
+                                                  inventory(self.slot / "manifests" / RUNTIME))
 
     def damage(self):
         assert self.action("stage")["ok"]
         self.compare_live()
         (self.runtime_slot / "emulator/shadPS4.exe").write_bytes(b"damaged active emulator\n")
-        manifest = self.manifest_slot / "emulator.json"
-        manifest.write_bytes(manifest.read_bytes() + b"\n")
 
     def check_protected(self):
         assert all((self.install / name).read_bytes() == payload for name, payload in PROTECTED.items())
@@ -212,38 +238,43 @@ def damaged_case(ctx, case_id, port):
     return {"homeRuntimeStatus": status, "damagedFilesUnchanged": True}
 
 
-def repair_case(ctx, case_id, port, cut, step):
+def repair_case(ctx, case_id, port, cut, repaired_count):
     f = Fixture(ctx, case_id, port)
     f.damage()
-    before_runtime = inventory(f.runtime_slot)
+    missing = f.runtime_slot / "tools/profile/defaults.txt"
+    missing.unlink()
+    healthy = f.runtime_slot / "server/olserver.py"
+    original_stat = healthy.stat()
+    os.utime(healthy, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns - 48 * 60 * 60 * 1_000_000_000))
+    healthy_time = healthy.stat().st_mtime_ns
+    extra = "emulator/player-notes.txt"
+    write_files(f.runtime_slot, {extra: b"keep in slot"})
+    manifest = f.manifest_slot / "emulator.json"
+    manifest.write_bytes(manifest.read_bytes() + b"\n")
     before_manifests = inventory(f.manifest_slot)
     exit_code = f.action("repair", cut)
     assert f.marker.read_bytes() == MARKER
-    (transaction,) = (f.install / "runtime").glob(f".repair-{RUNTIME}-*")
-    saved_runtime = transaction / "old/runtime" / RUNTIME
-    saved_manifests = transaction / "old/manifests" / RUNTIME
-    assert inventory(saved_runtime) == before_runtime
-    assert saved_manifests.is_dir() is (step >= 2)
-    assert f.runtime_slot.is_dir() is (step == 4)
-    assert f.manifest_slot.is_dir() is (step != 2)
-    assert (transaction / "new/runtime" / RUNTIME).is_dir() is (step < 4)
-    assert (transaction / "new/manifests" / RUNTIME).is_dir() is (step < 3)
+    assert f.runtime_slot.is_dir() and f.manifest_slot.is_dir()
+    assert inventory(f.manifest_slot) == before_manifests
+    assert not list((f.install / "runtime").glob(f".repair-{RUNTIME}-*"))
+    exe = "emulator/shadPS4.exe"
+    expected_exe = ((f.slot / "runtime" / RUNTIME / exe).read_bytes() if repaired_count else
+                    b"damaged active emulator\n")
+    assert (f.runtime_slot / exe).read_bytes() == expected_exe
+    assert missing.exists() is (repaired_count == 2)
 
     interrupted = inventory(f.install)
     f.action("confirm")
-    state_is(f.action("inspect-runtime"), ready=step == 4, repairable=step < 4)
-    assert state_is(f.action("stage"), ready=step == 4, repairable=step < 4)["ok"] is (step == 4)
+    ready = repaired_count == 2
+    state_is(f.action("inspect-runtime"), ready=ready, repairable=not ready)
+    assert state_is(f.action("stage"), ready=ready, repairable=not ready)["ok"] is ready
     assert inventory(f.install) == interrupted
     assert state_is(f.action("repair"), ready=True)["ok"]
-    f.compare_live()
-    assert inventory(saved_runtime) == before_runtime
-    assert inventory(saved_manifests) == before_manifests
-    assert not (transaction / "new/runtime" / RUNTIME).exists()
-    assert not (transaction / "new/manifests" / RUNTIME).exists()
-    assert list((f.install / "runtime").glob(f".repair-{RUNTIME}-*")) == [transaction]
+    f.compare_live({extra: digest(b"keep in slot")}, before_manifests)
+    assert healthy.stat().st_mtime_ns == healthy_time
     f.check_protected()
-    return {"cut": cut, "crashExit": exit_code, "readyAtCut": step == 4,
-            "requiredExplicitRepair": step < 4, "backupPreserved": True}
+    return {"cut": cut, "crashExit": exit_code, "readyAtCut": ready,
+            "replacementsAtCut": repaired_count, "healthyFileAndManifestsPreserved": True}
 
 
 def observe_manual(wrapper, state_dir):
@@ -359,6 +390,83 @@ def unleased_case(ctx, case_id, port):
             "directRuntimeExit": process.returncode, "repairAfterExit": True}
 
 
+def locked_case(ctx, case_id, port, *, loaded_dll):
+    f = Fixture(ctx, case_id, port)
+    f.damage()
+    ready = f.top / "external-runtime-ready"
+    if loaded_dll:
+        target = f.runtime_slot / "emulator/support.dll"
+        damaged_bytes = (Path(os.environ["SystemRoot"]) / "System32/version.dll").read_bytes()
+        command = [sys.executable, "-I", "-B", "-c", LOAD_SCRIPT, target, ready]
+    else:
+        target = f.runtime_slot / "server/olserver.py"
+        damaged_bytes = LOCK_SCRIPT
+        command = [sys.executable, "-I", "-B", target, ready]
+    target.write_bytes(damaged_bytes)
+    missing = f.runtime_slot / "tools/profile/defaults.txt"
+    missing.unlink()
+
+    with (f.top / "external-runtime.log").open("wb") as log:
+        process = subprocess.Popen(command, cwd=f.top, env=f.env, stdin=subprocess.DEVNULL,
+                                   stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+        try:
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline and process.poll() is None:
+                if ready.is_file() and ready.read_text() == ("loaded" if loaded_dll else "locked"):
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f"External runtime fixture failed to start. See {log.name}")
+            state_is(f.action("inspect-runtime"), repairable=True)
+            refused = state_is(f.action("repair"), repairable=True)
+            assert not refused["ok"] and refused["message"] == "in-use", refused
+            exe = "emulator/shadPS4.exe"
+            assert (f.runtime_slot / exe).read_bytes() == (f.slot / "runtime" / RUNTIME / exe).read_bytes()
+            assert target.read_bytes() == damaged_bytes and not missing.exists()
+            assert process.poll() is None
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+    assert state_is(f.action("repair"), ready=True)["ok"]
+    f.compare_live()
+    f.check_protected()
+    return {"blockedFile": target.relative_to(f.runtime_slot).as_posix(), "externalPid": process.pid,
+            "repairWhileRunning": refused, "previousFileRepaired": True, "repairAfterExit": True}
+
+
+def legacy_partial_manifests(ctx, port):
+    f = Fixture(ctx, "E15n", port)
+    f.damage()
+    transaction = f.install / "runtime" / f".repair-{RUNTIME}-1"
+    shutil.copytree(f.slot / "runtime", transaction / "new/runtime")
+    shutil.copytree(f.slot / "manifests" / RUNTIME, transaction / "new/manifests" / RUNTIME)
+    old_runtime = transaction / "old/runtime" / RUNTIME
+    old_manifests = transaction / "old/manifests" / RUNTIME
+    old_runtime.parent.mkdir(parents=True)
+    old_manifests.parent.mkdir(parents=True)
+    f.runtime_slot.rename(old_runtime)
+    f.manifest_slot.rename(old_manifests)
+
+    # The old repair moved the directories aside. A first file-level attempt
+    # restored just the emulator manifest before it stopped.
+    f.manifest_slot.mkdir()
+    manifest = "emulator.json"
+    shutil.copyfile(f.slot / "manifests" / RUNTIME / manifest, f.manifest_slot / manifest)
+    original_runtime = inventory(old_runtime)
+    original_manifests = inventory(old_manifests)
+    assert not f.action("stage")["ok"]
+    state_is(f.action("inspect-runtime"), repairable=True)
+    result = f.action("repair")
+    assert result["ok"], result
+    state_is(result, ready=True)
+    f.compare_live()
+    f.check_protected()
+    assert inventory(old_runtime) == original_runtime
+    assert inventory(old_manifests) == original_manifests
+    return {"completed": result, "originalBackupsPreserved": True}
+
+
 def run(ctx):
     fresh = (
         ("E15a", "runtime-fresh-before-slot", False, False),
@@ -367,10 +475,10 @@ def run(ctx):
         ("E15d", "runtime-fresh-after-manifests", True, True),
     )
     repair = (
-        ("E15f", "runtime-repair-after-save-slot", 1),
-        ("E15g", "runtime-repair-after-save-manifests", 2),
-        ("E15h", "runtime-repair-after-publish-manifests", 3),
-        ("E15i", "runtime-repair-after-publish-slot", 4),
+        ("E15f", "runtime-repair-before-file-1", 0),
+        ("E15g", "runtime-repair-after-file-1", 1),
+        ("E15h", "runtime-repair-before-file-2", 1),
+        ("E15i", "runtime-repair-after-file-2", 2),
     )
     # The guarded fixture requires a valid loopback origin. Runtime actions do not
     # need HTTP, so keep a port bound without serving any release assets.
@@ -382,10 +490,16 @@ def run(ctx):
                        lambda: fresh_case(ctx, case_id, port, cut, slot, manifests))
         ctx.record("E15e", "A damaged runtime stays in place and reports Repair eligibility",
                    lambda: damaged_case(ctx, "E15e", port))
-        for case_id, cut, step in repair:
-            ctx.record(case_id, f"Repair preserves originals after {cut}",
-                       lambda: repair_case(ctx, case_id, port, cut, step))
+        for case_id, cut, repaired_count in repair:
+            ctx.record(case_id, f"Repair keeps the live slot through {cut}",
+                       lambda: repair_case(ctx, case_id, port, cut, repaired_count))
         ctx.record("E15j", "Windows manual Play blocks Repair until its process tree is gone",
                    lambda: manual_case(ctx, "E15j", port))
         ctx.record("E15k", "An unleased process from the active runtime blocks Repair until exit",
                    lambda: unleased_case(ctx, "E15k", port))
+        ctx.record("E15l", "A DLL loaded by a process outside the slot blocks its replacement",
+                   lambda: locked_case(ctx, "E15l", port, loaded_dll=True))
+        ctx.record("E15m", "An external interpreter holding a script open blocks its replacement",
+                   lambda: locked_case(ctx, "E15m", port, loaded_dll=False))
+        ctx.record("E15n", "File-level Repair completes a partially restored legacy manifest set",
+                   lambda: legacy_partial_manifests(ctx, port))

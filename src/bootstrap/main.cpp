@@ -27,6 +27,7 @@ namespace bootstrap
             std::string newest;
             unsigned notices{};
             bool empty_on_load{};
+            std::optional<pointer> pending_fallback;
             FILETIME prior_log_time{};
 
             bool newly_extracted(const fs::path& folder) const
@@ -65,12 +66,10 @@ namespace bootstrap
             void check_confirmed(const std::string& folder, bool is_current)
             {
                 if (folder.empty()) return;
-                check(folder, check_mode::startup);
+                view.folders[folder] = verify_confirmed(root, folder);
                 const auto& existing = view.folders.at(folder);
-                if (!existing) return;
-                if (read_confirmation(root, folder) == existing.fingerprint)
-                    view.confirmed_folders.insert(folder);
-                else if (is_current)
+                if (existing) view.confirmed_folders.insert(folder);
+                else if (is_current && existing.needs_confirmation)
                     check(folder, check_mode::full); // B3 may turn the replaced current into a trial.
             }
 
@@ -110,6 +109,7 @@ namespace bootstrap
                         {
                             log(root, "using verified previous for this start");
                             record_notice("fallback-write");
+                            if (selected.save->current == fallback.folder) pending_fallback = *selected.save;
                         }
                         if (fallback.next == action::dialog_write && !args.prepare) write_dialog(error);
                         return fallback;
@@ -168,7 +168,14 @@ namespace bootstrap
                 view.state = loaded.value;
                 view.folders.clear();
                 view.confirmed_folders.clear();
-                view.stable_only = read_channel(root) == update_channel::stable;
+                view.published_folders.clear();
+                view.explicit_request = false;
+                pending_fallback.reset();
+                view.recovered = loaded.source == pointer_source::empty ? last_confirmed(root) : std::string{};
+                const auto channel_choice = read_channel(root);
+                const auto last_running = view.state.current.empty() ? view.recovered : view.state.current;
+                view.stable_only = channel_choice ? *channel_choice == update_channel::stable :
+                    !last_running.empty() && folder_version(last_running).find('-') == std::string_view::npos;
                 newest.clear();
                 view.last_reason.clear();
                 view.rejected_arrivals.clear();
@@ -188,6 +195,8 @@ namespace bootstrap
                 check(view.state.trial, check_mode::full);
                 view.where = step::validate_names;
                 if (auto selected = apply(decide(view)); selected.next != action::next) return selected;
+                if (!channel_choice && !view.state.current.empty())
+                    view.stable_only = folder_version(view.state.current).find('-') == std::string_view::npos;
 
                 const auto request_path = root / "request.txt";
                 const auto bytes = read_record(request_path);
@@ -196,12 +205,15 @@ namespace bootstrap
                 view.incoming = parse_request(bytes);
                 if (view.incoming) check(view.incoming->trial, check_mode::full);
                 view.where = step::process_request;
-                return apply(decide(view));
+                auto selected = decide(view);
+                view.explicit_request = selected.save && selected.remove_request;
+                return apply(std::move(selected));
             }
 
             decision arrival()
             {
-                if (!view.state.trial.empty()) return {action::next};
+                if (view.explicit_request && !view.state.trial.empty()) return {action::next};
+                view.published_folders.clear();
                 std::error_code error;
                 for (fs::directory_iterator it(root, error), end; !error && it != end; it.increment(error))
                 {
@@ -209,6 +221,9 @@ namespace bootstrap
                     std::error_code attributes_error;
                     if (!valid_folder(filename) || !plain_path(it->path()) || !it->is_directory(attributes_error)) continue;
                     check(filename);
+                    const auto& verified = view.folders.at(filename);
+                    if (verified && read_record(root / (filename + ".arrival.txt"), 65) == verified.fingerprint + "\n")
+                        view.published_folders.insert(filename);
                     if (!view.state.current.empty() && filename != view.state.previous &&
                         compare(filename, view.state.current) < 0 && view.folders[filename] && newly_extracted(it->path()))
                     {
@@ -228,7 +243,8 @@ namespace bootstrap
                         view.folders[view.checked_arrival] = view.arrival_result;
                         return apply(decide(view));
                     }
-                    log(root, selected.folder + ": damaged:" + view.arrival_result.bad_file);
+                    log(root, selected.folder + (view.arrival_result.retryable ? ": temporarily unreadable:" : ": damaged:") +
+                        view.arrival_result.bad_file);
                     selected = apply(decide(view));
                     if (selected.next != action::next) return selected;
                     view.rejected_arrivals.insert(view.checked_arrival);
@@ -327,9 +343,7 @@ namespace bootstrap
                     }
                     if (!confirmed)
                     {
-                        const auto previous = !use_previous && folder != view.state.previous &&
-                            view.launches < launch_limit && view.confirmed_folders.contains(view.state.previous)
-                            ? view.state.previous : std::string{};
+                        const auto previous = use_previous ? std::string{} : previous_for_dialog(view, folder);
                         const auto choice = dialog(root, L"show23-pc " + widen(folder_version(folder)) + L" did not open",
                             timeout ? (fixture_run ? L"No window after 2 seconds." : L"No window after 120 seconds.") : widen(reason),
                             newest, timeout, previous);
@@ -365,14 +379,20 @@ namespace bootstrap
                     {
                         view.where = step::confirmed;
                         const auto promote = decide(view);
-                        const auto verified = verify(root / folder, check_mode::startup);
                         const auto before = view.folders.find(folder);
-                        const bool same_bytes = verified && before != view.folders.end() &&
-                            before->second.fingerprint == verified.fingerprint;
-                        bool recorded{};
-                        for (unsigned attempt = 0; same_bytes && promote.save && attempt < 3; ++attempt)
+                        const bool can_capture = promote.save && before != view.folders.end();
+                        const bool captured = can_capture && capture_confirmation(root, folder, before->second.fingerprint);
+                        if (can_capture && !captured && GetLastError() == ERROR_READ_FAULT && view.state.starts)
                         {
-                            if (write_confirmation(root, folder, verified.fingerprint) && save_pointer(promote))
+                            auto retry = view.state;
+                            --retry.starts;
+                            if (commit(root, view.state, retry)) view.state = std::move(retry);
+                            log(root, "confirmation temporarily unreadable for " + folder);
+                        }
+                        bool recorded{};
+                        for (unsigned attempt = 0; captured && attempt < 3; ++attempt)
+                        {
+                            if (save_pointer(promote))
                             {
                                 view.state = *promote.save;
                                 view.confirmed_folders.insert(folder);
@@ -385,6 +405,14 @@ namespace bootstrap
                             if (attempt != 2) Sleep(500);
                         }
                         log(root, recorded ? "confirmed " + folder : "could not record confirmation for " + folder);
+                    }
+                    while (pending_fallback && WaitForSingleObject(app.process.get(), 250) == WAIT_TIMEOUT)
+                    {
+                        const decision retry{action::next, *pending_fallback};
+                        if (!save_pointer(retry)) continue;
+                        view.state = *pending_fallback;
+                        pending_fallback.reset();
+                        log(root, "saved the previously blocked fallback record");
                     }
                     WaitForSingleObject(app.process.get(), INFINITE);
                     if (!GetExitCodeProcess(app.process.get(), &code)) return 1;
@@ -441,6 +469,37 @@ namespace bootstrap
                 }
             }
         };
+
+        int select_manual_folder(const fs::path& root)
+        {
+            if (!plain_path(root)) return 1;
+            const auto loaded = load_pointer(root);
+            const auto& state = loaded.value;
+            for (const auto* name : {&state.current, &state.previous})
+                if (!name->empty() && verify_confirmed(root, *name, false))
+                    return print_folder(*name) ? 0 : 1;
+
+            // A recorded confirmed slot that could not be verified must not be
+            // bypassed by running its unverified replacement through manual mode.
+            if (!state.current.empty() || !state.previous.empty()) return 1;
+            if (!state.trial.empty())
+                return verify(root / state.trial, check_mode::full) && print_folder(state.trial) ? 0 : 1;
+            const auto recovered = last_confirmed(root);
+            if (!recovered.empty())
+                return verify_confirmed(root, recovered, false) && print_folder(recovered) ? 0 : 1;
+
+            std::string newest;
+            std::error_code error;
+            for (fs::directory_iterator it(root, error), end; !error && it != end; it.increment(error))
+            {
+                const auto name = narrow(it->path().filename().native());
+                std::error_code status;
+                if (valid_folder(name) && plain_path(it->path()) && it->is_directory(status) &&
+                    (newest.empty() || compare_slots(newest, name) < 0)) newest = name;
+            }
+            return !error && !newest.empty() && verify(root / newest, check_mode::full) &&
+                print_folder(newest) ? 0 : 1;
+        }
     }
 
     int run()
@@ -453,6 +512,7 @@ namespace bootstrap
         app.executable = path;
         app.root = app.executable.parent_path() / "show23-pc/versions";
         app.args = parse_arguments();
+        if (app.args.manual) return select_manual_folder(app.root);
         app.fixture_run = fixture::enabled(app.root.parent_path());
 
         const auto already_open = [&]
@@ -492,7 +552,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     try { return bootstrap::run(); }
     catch (...)
     {
-        if (bootstrap::parse_arguments().prepare) return 1;
+        const auto args = bootstrap::parse_arguments();
+        if (args.prepare || args.manual) return 1;
         MessageBoxW(nullptr, L"show23-pc could not read its version records.\nYour games, saves and settings are not affected.",
             L"show23-pc", MB_OK | MB_ICONERROR);
         return 1;

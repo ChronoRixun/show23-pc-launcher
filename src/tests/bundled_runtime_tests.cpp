@@ -1,11 +1,10 @@
 #include "std_include.hpp"
-#include <cstdio>
 #include "test.hpp"
 #include "show23/input_paths.hpp"
-#include <thread>
 #include "updater/part_store.hpp"
 #include <Windows.h>
 
+#include <chrono>
 #include <fstream>
 #include <iterator>
 #include <rapidjson/writer.h>
@@ -109,9 +108,15 @@ TEST(bundled_runtime_leaves_damage_for_explicit_same_version_repair)
     const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
     const auto marker = f.install / "manifests/runtime.txt";
     const auto old_manifest = f.install / "manifests/0.1.0/emulator.json";
+    const auto healthy = f.install / "runtime/0.1.0/server/olserver.py";
+    const auto extra = f.install / "runtime/0.1.0/emulator/player-notes.txt";
     const auto marker_time = fs::last_write_time(marker);
     const auto manifest = read(old_manifest) + "\n";
     write(old_manifest, manifest);
+    const auto manifest_time = fs::last_write_time(old_manifest);
+    fs::last_write_time(healthy, fs::last_write_time(healthy) - std::chrono::hours(48));
+    const auto healthy_time = fs::last_write_time(healthy);
+    write(extra, "keep in slot");
     write(exe, "bad");
     const auto damaged = parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0");
     CHECK(!damaged.ready && !damaged.fresh && damaged.repairable);
@@ -122,15 +127,53 @@ TEST(bundled_runtime_leaves_damage_for_explicit_same_version_repair)
     CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").ready);
     CHECK(read(exe) == "abc");
     CHECK(fs::last_write_time(marker) == marker_time);
-    const auto backup = f.install / "runtime/.repair-0.1.0-1/old";
-    CHECK(read(backup / "runtime/0.1.0/emulator/shadPS4.exe") == "bad");
-    CHECK(read(backup / "manifests/0.1.0/emulator.json") == manifest);
+    CHECK(read(old_manifest) == manifest && fs::last_write_time(old_manifest) == manifest_time);
+    CHECK(fs::last_write_time(healthy) == healthy_time);
+    CHECK(read(extra) == "keep in slot");
     CHECK(read(f.install / "data/profiles/default/user/save") == "preserve");
 
     write(exe, "more damage");
     CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
-    CHECK(read(backup / "runtime/0.1.0/emulator/shadPS4.exe") == "bad");
-    CHECK(read(f.install / "runtime/.repair-0.1.0-2/old/runtime/0.1.0/emulator/shadPS4.exe") == "more damage");
+    CHECK(read(exe) == "abc");
+    CHECK(fs::last_write_time(healthy) == healthy_time);
+    CHECK(read(extra) == "keep in slot");
+}
+
+TEST(bundled_runtime_keeps_completed_repairs_when_a_later_file_is_locked)
+{
+    for (const auto* locked_file : {"emulator/support.dll", "server/olserver.py"})
+    {
+        fixture f;
+        f.part("emulator", "emulator", {"shadPS4.exe", "support.dll"});
+        CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+        const auto slot = f.install / "runtime/0.1.0";
+        const auto exe = slot / "emulator/shadPS4.exe";
+        const auto target = slot / locked_file;
+        const auto missing = slot / "tools/profile/defaults.txt";
+        write(exe, "bad");
+        write(target, "bad");
+        CHECK(fs::remove(missing));
+
+        const show23::input_paths::handle directory(CreateFileW(slot.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        CHECK(directory);
+        {
+            const show23::input_paths::handle lock(CreateFileW(target.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+            CHECK(lock);
+            CHECK(!parts::runtime_in_use(f.install));
+            CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0") == "in-use");
+            CHECK(read(exe) == "abc");
+            CHECK(read(target) == "bad");
+            CHECK(!fs::exists(missing));
+        }
+        fs::last_write_time(exe, fs::last_write_time(exe) - std::chrono::hours(48));
+        const auto repaired_time = fs::last_write_time(exe);
+        CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
+        CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").ready);
+        CHECK(fs::last_write_time(exe) == repaired_time);
+        CHECK(read(target) == "abc" && read(missing) == "abc");
+    }
 }
 
 TEST(bundled_runtime_refuses_staging_and_repair_from_a_corrupt_bundle)
@@ -291,9 +334,17 @@ TEST(bundled_runtime_only_resumes_an_interrupted_repair_on_request)
         CHECK(fs::exists(slot) == (interruption == 0));
         CHECK(fs::exists(manifests) == (interruption != 2));
         CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").repairable);
+        if (interruption == 2)
+        {
+            // A later in-place Repair may have been interrupted while restoring individual manifests.
+            fs::create_directories(manifests);
+            fs::copy_file(f.bundle / "manifests/0.1.0/emulator.json", manifests / "emulator.json");
+        }
         CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
         CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").ready);
-        CHECK(read(transaction / "old/runtime/0.1.0/emulator/shadPS4.exe") == "bad");
+        const auto original = transaction / "old/runtime/0.1.0/emulator/shadPS4.exe";
+        CHECK(fs::exists(original) == (interruption >= 1));
+        if (interruption >= 1) CHECK(read(original) == "bad");
     }
 }
 
@@ -383,27 +434,13 @@ TEST(bundled_runtime_excludes_unleased_images_from_new_and_interrupted_repair)
             CHECK(WaitForSingleObject(child.hProcess, 0) == WAIT_TIMEOUT);
         }
         CHECK(!parts::runtime_in_use(f.install));
-        std::jthread release_directory;
-        if (pending)
-        {
-            // Model a short-lived handle Windows can retain after a process has exited.
-            show23::input_paths::handle lock(CreateFileW(slot.c_str(), GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-            CHECK(lock);
-            if (lock)
-                release_directory = std::jthread([locked = std::move(lock)]
-                {
-                    Sleep(750);
-                    (void)locked;
-                });
-        }
-        const auto repaired = parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0");
-        if (!repaired.empty())
-            std::fprintf(stderr, "Repair after process exit (pending=%d, Win32=%lu): %s\n",
-                static_cast<int>(pending), GetLastError(), repaired.c_str());
-        CHECK(repaired.empty());
+        const show23::input_paths::handle directory(CreateFileW(slot.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        CHECK(directory);
+        CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
         CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").ready);
-        CHECK(fs::exists(backup / "emulator/shadPS4.exe") && read(backup / "emulator/shadPS4.exe") == "bad");
+        CHECK(!fs::exists(backup));
+        CHECK(fs::exists(image));
     }
 }
 

@@ -238,9 +238,10 @@ namespace
         if (!versioned_start::confirm()) return 2;
         while (versioned_start::status() == versioned_start::gate::waiting) Sleep(25);
         if (!versioned_start::unlocked()) return 3;
-        release_source::sync_bootstrap_channel();
         launcher_update::cleanup();
 
+        utils::io::write_file(data / "fixture-channel.txt",
+            release_channel::channel_name(release_source::current_channel()));
         utils::io::write_file(data / ("fixture-confirmed-" + current + ".txt"), layout.folder);
         if (setting("SHOW23_FIXTURE_SHORTCUTS") == "1") show23::update_shortcuts(false);
         const auto action = setting("SHOW23_FIXTURE_ACTION");
@@ -276,6 +277,9 @@ namespace
             utils::io::write_file(data / "fixture-runtime-result.json", buffer.GetString());
             return 0;
         }
+        const auto fixture_channel = setting("SHOW23_FIXTURE_CHANNEL");
+        if (!fixture_channel.empty() &&
+            !launcher_update::channel_changed(release_channel::parse_channel(fixture_channel))) return 6;
         if (current == target) return 0;
         if (action == "retry")
         {

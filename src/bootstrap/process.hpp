@@ -25,7 +25,7 @@ namespace bootstrap
 
     struct arguments
     {
-        bool prepare{}, update_restart{};
+        bool prepare{}, manual{}, update_restart{};
         std::vector<std::wstring> flags;
     };
 

@@ -24,7 +24,7 @@ namespace versions
             return good(view, name) && view.confirmed_folders.contains(name);
         }
 
-        bool allows_trial(const disk_view& view, std::string_view name)
+        bool allows_arrival(const disk_view& view, std::string_view name)
         {
             return !view.stable_only || folder_version(name).find('-') == std::string_view::npos;
         }
@@ -44,6 +44,19 @@ namespace versions
             state.failed.insert(state.failed.begin(), {folder, fingerprint, std::move(reason)});
             if (state.failed.size() > 8) state.failed.pop_back();
         }
+    }
+
+    int compare_slots(std::string_view a, std::string_view b)
+    {
+        if (const auto order = compare(a, b)) return order;
+        if (a.size() != b.size()) return a.size() < b.size() ? -1 : 1;
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
+
+    std::string previous_for_dialog(const disk_view& view, std::string_view attempted)
+    {
+        return attempted != view.state.previous && confirmed(view, view.state.previous)
+            ? view.state.previous : std::string{};
     }
 
     decision failed_commit(const disk_view& view)
@@ -66,24 +79,35 @@ namespace versions
         {
         case step::validate_names:
         {
+            if (const auto* current = lookup(view, next.current); current && current->retryable)
+            {
+                const auto other = previous_for_dialog(view, next.current);
+                if (!other.empty()) return {view.prepare ? action::prepared : action::launch_current, {}, other};
+                return {action::dialog_none};
+            }
+
             // These bytes may be valid, but the current folder name cannot confirm a repack.
             std::string changed_current;
             for (auto* name : {&next.current, &next.previous, &next.trial})
             {
                 if (name->empty() || good(view, *name)) continue;
                 const auto* bad = lookup(view, *name);
+                if (bad && bad->retryable) continue;
+                if (bad && bad->needs_confirmation) { name->clear(); continue; }
                 mark_failed(next, *name, bad, "damaged:" + (bad ? bad->bad_file : std::string("version.txt")));
                 name->clear();
             }
             if (!next.current.empty() && !confirmed(view, next.current))
                 changed_current = std::exchange(next.current, {});
-            if (!next.previous.empty() && !confirmed(view, next.previous)) next.previous.clear();
-            if (next.current.empty() && !next.previous.empty()) next.current = std::exchange(next.previous, {});
-            if (next.current == next.trial || !allows_trial(view, next.trial)) next.trial.clear();
+            const auto* previous = lookup(view, next.previous);
+            if (!next.previous.empty() && !confirmed(view, next.previous) && !(previous && previous->retryable))
+                next.previous.clear();
+            if (next.current.empty() && confirmed(view, next.previous)) next.current = std::exchange(next.previous, {});
+            if (next.current == next.trial) next.trial.clear();
             if (next.trial.empty())
             {
                 next.starts = 0;
-                if (!changed_current.empty() && allows_trial(view, changed_current))
+                if (!changed_current.empty())
                 {
                     const auto* replacement = lookup(view, changed_current);
                     const auto prior_failure = std::ranges::any_of(next.failed, [&](const auto& failure) {
@@ -99,8 +123,13 @@ namespace versions
         case step::process_request:
             if (!view.request_present) return {action::next};
             if (view.incoming && view.incoming->id == next.last_request) return {action::next, {}, {}, true};
+            if (view.incoming)
+            {
+                const auto* target = lookup(view, view.incoming->trial);
+                if (target && target->retryable) return {action::next};
+            }
             if (!view.incoming || !good(view, view.incoming->trial) ||
-                view.incoming->trial == next.current || !allows_trial(view, view.incoming->trial) ||
+                view.incoming->trial == next.current ||
                 (view.incoming->reason == "switch-to-stable" &&
                     folder_version(view.incoming->trial).find('-') != std::string_view::npos))
                 return {action::next, {}, {}, true, true};
@@ -112,18 +141,27 @@ namespace versions
 
         case step::arrival:
         {
-            if (!next.trial.empty()) return {action::next};
+            if (!next.trial.empty() && view.explicit_request) return {action::next};
+            const auto pending = lookup(view, next.trial);
             std::string candidate;
             for (const auto& [name, result] : view.folders)
             {
-                if (!valid_folder(name) || !allows_trial(view, name) ||
+                const auto recovering = next.trial.empty() && next.current.empty() && name == view.recovered;
+                if (!next.trial.empty() &&
+                    (!view.published_folders.contains(name) || folder_version(name) != folder_version(next.trial) ||
+                     compare_slots(name, next.trial) <= 0 || (pending && pending->fingerprint == result.fingerprint)))
+                    continue;
+                if (!valid_folder(name) || (!recovering && !allows_arrival(view, name)) ||
                     view.rejected_arrivals.contains(name) || name == next.current || name == next.previous ||
                     (!next.current.empty() && compare(name, next.current) <= 0) ||
                     std::ranges::any_of(next.failed, [&](const auto& failed)
                         { return failed.folder == name && failed.fingerprint == result.fingerprint; })) continue;
-                const auto order = candidate.empty() ? -1 : compare(candidate, name);
-                if (order < 0 || (order == 0 && (candidate.size() < name.size() ||
-                    (candidate.size() == name.size() && candidate < name)))) candidate = name;
+                if (recovering)
+                {
+                    candidate = name;
+                    break;
+                }
+                if (candidate.empty() || compare_slots(candidate, name) < 0) candidate = name;
             }
             if (candidate.empty()) return {action::next};
             if (candidate != view.checked_arrival) return {action::scan, {}, candidate};
@@ -133,6 +171,7 @@ namespace versions
                 next.starts = 0;
                 clear_failed(next, candidate);
             }
+            else if (view.arrival_result.retryable) return {action::next};
             else mark_failed(next, candidate, &view.arrival_result, "damaged:" + view.arrival_result.bad_file);
             return {action::next, next};
         }
@@ -142,6 +181,11 @@ namespace versions
             {
                 if (confirmed(view, next.current)) return {action::prepared, {}, next.current};
                 if (good(view, next.trial) && next.starts < trial_starts) return {action::prepared, {}, next.trial};
+                return {action::dialog_none};
+            }
+            if (const auto* trial = lookup(view, next.trial); trial && trial->retryable)
+            {
+                if (confirmed(view, next.current)) return {action::launch_current, {}, next.current};
                 return {action::dialog_none};
             }
             if (!next.trial.empty() && next.starts >= trial_starts)
@@ -173,7 +217,7 @@ namespace versions
 
         case step::retry:
             for (const auto& failed : next.failed)
-                if (failed.folder != next.current && allows_trial(view, failed.folder) && good(view, failed.folder))
+                if (failed.folder != next.current && good(view, failed.folder))
                     return {action::next, {}, failed.folder};
             return {action::dialog_none};
         }

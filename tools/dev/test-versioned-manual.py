@@ -50,12 +50,17 @@ def check(package, work, shell):
 
         new = versions / "0.1.4"
         (new / "manual").mkdir(parents=True)
-        (new / "version.txt").write_bytes(seal(
-            b"show23-pc version 1\nversion 0.1.4\nchannel stable\nbootstrap 1\n"
-            + b"file " + b"a" * 64 + b" 3 show23-pc-launcher.exe\n"
-        ))
+        (new / "show23-pc-launcher.exe").write_bytes(b"new")
         for folder, label in ((old, "current"), (new, "new")):
             (folder / "manual/play.sh").write_bytes(f'printf "%s\\n" "{label}" "$@"\n'.encode())
+            base = folder.name.split("~")[0]
+            channel = "beta" if "-" in base else "stable"
+            body = f"show23-pc version 1\nversion {base}\nchannel {channel}\nbootstrap 1\n"
+            for file in sorted(folder.rglob("*")):
+                if file.is_file() and file.name != "version.txt":
+                    content = file.read_bytes()
+                    body += f"file {hashlib.sha256(content).hexdigest()} {len(content)} {file.relative_to(folder).as_posix()}\n"
+            (folder / "version.txt").write_bytes(seal(body.encode()))
         args = ["install with spaces", "emulator with spaces", "--name", "Player One"]
         actual = run("play.sh", args)
         assert actual.returncode == 0 and actual.stdout.splitlines() == ["new", *args], actual
@@ -67,6 +72,12 @@ def check(package, work, shell):
         actual = run("play.sh", args)
         assert actual.returncode == 0 and actual.stdout.splitlines() == ["current", *args], actual
         assert pointer.read_bytes() == body
+        script = old / "manual/play.sh"
+        good = script.read_bytes()
+        script.write_bytes(b"!" + good[1:])
+        actual = run("play.sh", args)
+        assert actual.returncode == 1 and "No verified launcher version" in actual.stderr, actual
+        script.write_bytes(good)
 
         # A torn pointer and an invalid higher folder must leave the valid old folder usable.
         pointer.write_text("torn")

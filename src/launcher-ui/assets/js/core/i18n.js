@@ -21,7 +21,7 @@
                 "invalid-request": "The launcher ignored an invalid version request.",
                 "ignored-older": "An older extracted launcher version was ignored.",
                 "counter-write": "The launcher could not record the update’s start.",
-                "fallback-write": "Started the previous confirmed version. The launcher could not save the version record and will try again next time.",
+                "fallback-write": "Started the previous confirmed version. The launcher is waiting to save the version record.",
                 "waiting": "Confirming this launcher version…",
                 "deferred": "Restart the launcher to finish confirming this version."
             },
@@ -541,7 +541,7 @@
                 "invalid-request": "Le lanceur a ignoré une demande de version non valide.",
                 "ignored-older": "Une ancienne version extraite du lanceur a été ignorée.",
                 "counter-write": "Le lanceur n’a pas pu enregistrer le démarrage de la mise à jour.",
-                "fallback-write": "La dernière version de secours a démarré. Le lanceur réessaiera d’enregistrer la version au prochain démarrage.",
+                "fallback-write": "La version précédente confirmée a démarré. Le lanceur attend de pouvoir enregistrer le registre des versions.",
                 "waiting": "Confirmation de cette version du lanceur…",
                 "deferred": "Redémarrez le lanceur pour terminer la confirmation de cette version."
             },
@@ -1055,7 +1055,7 @@
                 "invalid-request": "El lanzador ignoró una solicitud de versión no válida.",
                 "ignored-older": "Se ignoró una versión anterior extraída del lanzador.",
                 "counter-write": "El lanzador no pudo registrar el inicio de la actualización.",
-                "fallback-write": "Se inició la versión anterior confirmada. El lanzador intentará guardar el registro de versiones la próxima vez.",
+                "fallback-write": "Se inició la versión anterior confirmada. El lanzador está esperando para guardar el registro de versiones.",
                 "waiting": "Confirmando esta versión del lanzador…",
                 "deferred": "Reinicia el lanzador para terminar de confirmar esta versión."
             },
@@ -1569,7 +1569,7 @@
                 "invalid-request": "Программа запуска проигнорировала недопустимый запрос версии.",
                 "ignored-older": "Более старая распакованная версия программы запуска проигнорирована.",
                 "counter-write": "Не удалось записать запуск обновления.",
-                "fallback-write": "Запущена предыдущая подтверждённая версия. Программа запуска попробует сохранить запись о версиях при следующем запуске.",
+                "fallback-write": "Запущена предыдущая подтверждённая версия. Программа запуска ожидает возможности сохранить запись о версиях.",
                 "waiting": "Подтверждение этой версии программы запуска…",
                 "deferred": "Перезапустите программу запуска, чтобы завершить подтверждение этой версии."
             },

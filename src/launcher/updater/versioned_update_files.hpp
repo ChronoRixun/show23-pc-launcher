@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace versions { struct pointer; }
+namespace versions { struct pointer; struct request; }
 
 namespace versioned_update_files
 {
@@ -15,6 +15,10 @@ namespace versioned_update_files
     std::optional<std::string> verified_slot(const std::filesystem::path& root, std::string_view version);
     void cleanup(const std::filesystem::path& root);
     void remove_transient(const std::filesystem::path& folder);
+
+    enum class request_write { saved, pending, rejected };
+    request_write try_request(const std::filesystem::path& root, std::string_view running,
+        const versions::request& request, std::string_view retry_fingerprint = {});
 
     class partial_slot
     {
@@ -26,7 +30,8 @@ namespace versioned_update_files
 
         std::string extract(const std::filesystem::path& zip, const std::function<bool()>& cancelled);
 
-        // Publish under the caller's selection lock. A forward update supplies the pointer for implicit arrival.
+        // Publish under the caller's selection lock. A forward update supplies the pointer
+        // and records the exact inventory for bootstrap's implicit arrival.
         std::string publish(const std::filesystem::path& manifest, const versions::pointer* arrival, std::string& folder);
 
     private:

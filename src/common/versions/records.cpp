@@ -1,6 +1,7 @@
 #include "records.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <map>
 #include <set>
@@ -305,45 +306,96 @@ namespace versions
 
     std::optional<update_channel> read_channel(const fs::path& root)
     {
-        const auto value = read_record(root / "channel.txt", 16);
-        if (value == "stable\n") return update_channel::stable;
-        if (value == "beta\n") return update_channel::beta;
+        const auto value = read_record(root / "channel.txt", 64);
+        if (value == "show23-pc channel 1\nstable\n") return update_channel::stable;
+        if (value == "show23-pc channel 1\nbeta\n") return update_channel::beta;
         return {};
     }
 
     bool write_channel(const fs::path& root, update_channel value)
     {
         return read_channel(root) == value ||
-            write_record(root / "channel.txt", value == update_channel::stable ? "stable\n" : "beta\n");
+            write_record(root / "channel.txt", value == update_channel::stable ?
+                "show23-pc channel 1\nstable\n" : "show23-pc channel 1\nbeta\n");
+    }
+
+    fs::path detail::confirmation_path(const fs::path& root, std::string_view folder)
+    {
+        return root / "confirmed" / (std::string(folder) + ".txt");
+    }
+
+    std::optional<detail::confirmation> detail::parse_confirmation(std::string_view data, std::string_view folder)
+    {
+        const bool legacy = data.starts_with("show23-pc confirmed 1");
+        const auto input = legacy ? parse_text(data, "show23-pc confirmed 1", 512) :
+            parse_text(data, "show23-pc confirmed 2", confirmation_limit);
+        if (!input || (legacy ? input->lines.size() != 3 : input->lines.size() < 4 || input->lines.size() > 8196) ||
+            field(input->lines[1], "folder") != folder) return {};
+        const auto fingerprint = field(input->lines[2], "inventory");
+        if (!fingerprint || !hex(*fingerprint, 64)) return {};
+        confirmation value{std::string(*fingerprint), {}};
+        if (legacy) return value;
+        const auto time = field(input->lines[3], "confirmed-at");
+        if (!time || !number(*time, value.confirmed_at) || !value.confirmed_at) return {};
+        value.files.reserve(input->lines.size() - 4);
+        for (std::size_t i = 4; i < input->lines.size(); ++i)
+        {
+            const auto row = field(input->lines[i], "file");
+            if (!row) return {};
+            auto path = *row;
+            file_stamp stamp;
+            for (const auto member : std::array{&stamp.size, &stamp.last_write, &stamp.changed, &stamp.volume, &stamp.index})
+            {
+                const auto space = path.find(' ');
+                if (space == path.npos || !number(path.substr(0, space), *member)) return {};
+                path.remove_prefix(space + 1);
+            }
+            if (!stamp.index || !safe_relative(path)) return {};
+            stamp.path = path;
+            value.files.push_back(std::move(stamp));
+        }
+        return value;
+    }
+
+    bool detail::persist_confirmation(const fs::path& root, std::string_view folder, const confirmation& value)
+    {
+        if (!valid_folder(folder) || !hex(value.fingerprint, 64)) return false;
+        const auto record = confirmation_path(root, folder);
+        const auto base = record.parent_path();
+        if (!plain_path(base, true)) return false;
+        std::error_code error;
+        fs::create_directory(base, error);
+        if (error || !fs::is_directory(base, error) || error) return false;
+        auto stale = record;
+        stale += ".tmp";
+        if (plain_path(stale) && fs::is_regular_file(stale, error) && !error) fs::remove(stale, error);
+        if (error) return false;
+        std::string data = value.confirmed_at ? "show23-pc confirmed 2\nfolder " : "show23-pc confirmed 1\nfolder ";
+        data += std::string(folder) + "\ninventory " + value.fingerprint + '\n';
+        if (value.confirmed_at) data += "confirmed-at " + std::to_string(value.confirmed_at) + '\n';
+        for (const auto& entry : value.files)
+            data += "file " + std::to_string(entry.size) + ' ' + std::to_string(entry.last_write) + ' ' +
+                std::to_string(entry.changed) + ' ' + std::to_string(entry.volume) + ' ' + std::to_string(entry.index) +
+                ' ' + entry.path + '\n';
+        const auto checksum = sha256(data);
+        if (checksum.empty()) return false;
+        data += "end " + checksum + '\n';
+        return data.size() <= confirmation_limit && write_record(record, data);
     }
 
     std::string read_confirmation(const fs::path& root, std::string_view folder)
     {
         if (!valid_folder(folder)) return {};
-        const auto data = read_record(root / "confirmed" / (std::string(folder) + ".txt"), 512);
-        const auto confirm = parse_text(data, "show23-pc confirmed 1", 512);
-        if (!confirm || confirm->lines.size() != 3 ||
-            field(confirm->lines[1], "folder") != folder) return {};
-        const auto fingerprint = field(confirm->lines[2], "inventory");
-        return fingerprint && hex(*fingerprint, 64) ? std::string(*fingerprint) : std::string{};
+        const auto record = detail::parse_confirmation(
+            read_record(detail::confirmation_path(root, folder), detail::confirmation_limit), folder);
+        return record ? record->fingerprint : std::string{};
     }
 
     bool write_confirmation(const fs::path& root, std::string_view folder, std::string_view fingerprint)
     {
         if (!valid_folder(folder) || !hex(fingerprint, 64)) return false;
-        if (read_confirmation(root, folder) == fingerprint) return true;
-        const auto base = root / "confirmed";
-        if (!plain_path(base, true)) return false;
-        std::error_code error;
-        fs::create_directory(base, error);
-        if (error || !fs::is_directory(base, error) || error) return false;
-        const auto record = base / (std::string(folder) + ".txt");
-        auto stale = record;
-        stale += ".tmp";
-        if (plain_path(stale) && fs::is_regular_file(stale, error) && !error) fs::remove(stale, error);
-        if (error) return false;
-        return write_record(record, seal("show23-pc confirmed 1\nfolder " + std::string(folder) +
-            "\ninventory " + std::string(fingerprint) + "\n"));
+        return read_confirmation(root, folder) == fingerprint ||
+            detail::persist_confirmation(root, folder, {std::string(fingerprint), {}});
     }
 
     loaded_pointer select_pointer(const std::optional<pointer>& primary, const std::optional<pointer>& backup)

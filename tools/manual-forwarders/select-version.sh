@@ -42,34 +42,69 @@ def record(path, limit):
     return []
 
 
-def complete(name):
+def inventory(name):
     if folder_key(name) is None:
-        return False
+        return []
     slot = versions / name
     manual = slot / "manual"
     if slot.is_symlink() or manual.is_symlink() or not manual.is_dir():
-        return False
-    inventory = record(slot / "version.txt", 2 * 1024 * 1024)
+        return []
+    lines = record(slot / "version.txt", 2 * 1024 * 1024)
     base = name.split("~")[0]
     channel = "beta" if "-" in base else "stable"
-    return (
-        inventory[:4] == ["show23-pc version 1", "version " + base, "channel " + channel, "bootstrap 1"]
-        and len(inventory) > 4
-        and any(re.fullmatch(r"file [a-f0-9]{64} [0-9]+ show23-pc-launcher\.exe", line)
-                for line in inventory[4:])
-    )
+    return lines[4:] if lines[:4] == ["show23-pc version 1", "version " + base, "channel " + channel, "bootstrap 1"] else []
+
+
+def verified(name):
+    slot = versions / name
+    expected = {"version.txt"}
+    for line in inventory(name):
+        match = re.fullmatch(r"file ([a-f0-9]{64}) (0|[1-9][0-9]*) ([a-zA-Z0-9._ /-]+)", line)
+        if not match:
+            return False
+        raw = match[3]
+        parts = raw.split("/")
+        if (raw in expected or any(p in ("", ".", "..") or p.endswith((" ", ".")) for p in parts)):
+            return False
+        path = slot
+        for part in parts:
+            path = path / part
+            if path.is_symlink():
+                return False
+        if not path.is_file() or path.stat().st_size != int(match[2]):
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+        if digest.hexdigest() != match[1]:
+            return False
+        expected.add(raw)
+    if "show23-pc-launcher.exe" not in expected:
+        return False
+    actual = set()
+    for path in slot.rglob("*"):
+        if path.is_symlink():
+            return False
+        if path.is_file():
+            actual.add(path.relative_to(slot).as_posix())
+    return actual == expected
 
 
 def select():
     if versions.is_symlink() or versions.parent.is_symlink() or not versions.is_dir():
         return None
-    pointer = record(versions / "pointer.txt", 8192)
-    if len(pointer) >= 6 and pointer[0] == "show23-pc pointer 1":
-        for line, field in ((pointer[1], "current "), (pointer[3], "trial ")):
-            if line.startswith(field) and complete(line[len(field):]):
-                return line[len(field):]
-    return max((item.name for item in versions.iterdir() if complete(item.name)),
-               key=folder_key, default=None)
+    for record_name in ("pointer.txt", "pointer.bak"):
+        pointer = record(versions / record_name, 8192)
+        if len(pointer) >= 6 and pointer[0] == "show23-pc pointer 1":
+            for line, field in ((pointer[1], "current "), (pointer[3], "trial ")):
+                if line.startswith(field) and line[len(field):] != "-":
+                    name = line[len(field):]
+                    return name if folder_key(name) and verified(name) else None
+            break
+    newest = max((item.name for item in versions.iterdir() if inventory(item.name)),
+                 key=folder_key, default=None)
+    return newest if newest and verified(newest) else None
 
 
 try:
@@ -77,6 +112,6 @@ try:
 except OSError:
     selected = None
 if selected is None:
-    sys.exit("No complete launcher version was found. Extract the entire release ZIP.")
+    sys.exit("No verified launcher version is ready. Start the launcher or re-extract the complete ZIP.")
 print(selected)
 PY

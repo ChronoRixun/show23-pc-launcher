@@ -1006,5 +1006,5 @@ test('Home explains a confirmed fallback when a version record could not be writ
     const view = open({ 'get-startup': { notices: 'fallback-write\n' } });
     await view.clock.advance(0);
     assert.match(view.id('startup-notice').textContent, /previous confirmed version/);
-    assert.match(view.id('startup-notice').textContent, /try again next time/);
+    assert.match(view.id('startup-notice').textContent, /waiting to save/);
 });

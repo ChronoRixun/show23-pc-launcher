@@ -22,7 +22,6 @@ namespace release_source
     // The setting (launcher-update-channel): Stable unless the player chose Beta.
     release_channel::channel current_channel();
     void set_channel(release_channel::channel value);
-    void sync_bootstrap_channel();
 
     // With -offline this reads only that repository/channel's persisted metadata, without HTTP.
     // The release of `repo` for `channel` with every file in `required` (a release still uploading them

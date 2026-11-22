@@ -16,11 +16,11 @@ namespace versions
         step where{};
         std::map<std::string, verification, std::less<>> folders;
         std::optional<request> incoming;
-        bool request_present{}, prepare{}, stable_only{};
+        bool request_present{}, prepare{}, stable_only{}, explicit_request{};
         // Matching durable confirmation, in addition to the selected folder's startup check.
-        std::set<std::string, std::less<>> confirmed_folders;
+        std::set<std::string, std::less<>> confirmed_folders, published_folders;
         unsigned launches{};
-        std::string last_reason;
+        std::string last_reason, recovered;
         // Filled only after the newest quick candidate has been fully checked.
         std::string checked_arrival;
         verification arrival_result;
@@ -37,4 +37,6 @@ namespace versions
 
     decision decide(const disk_view& view);
     decision failed_commit(const disk_view& view);
+    int compare_slots(std::string_view a, std::string_view b);
+    std::string previous_for_dialog(const disk_view& view, std::string_view attempted);
 }

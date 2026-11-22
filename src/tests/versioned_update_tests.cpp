@@ -184,9 +184,13 @@ TEST(versioned_updates_preserve_different_valid_same_tag_bytes_and_their_receipt
     std::string folder;
     versions::pointer arrival;
     arrival.current = "0.1.3";
+    arrival.trial = "0.1.4";
+    arrival.starts = 1;
     CHECK(partial.publish(fixture.root / ".download-12/launcher.json", &arrival, folder).empty());
     CHECK(folder == "0.1.4~2");
-    CHECK(versions::verify(fixture.root / "0.1.4~2", versions::check_mode::full));
+    const auto published = versions::verify(fixture.root / "0.1.4~2", versions::check_mode::full);
+    CHECK(published);
+    CHECK(versions::read_record(fixture.root / "0.1.4~2.arrival.txt") == published.fingerprint + '\n');
     CHECK(versions::read_record(fixture.root / "0.1.4~2/show23-pc-launcher.exe") == "exe");
     CHECK(versions::read_record(fixture.root / "0.1.4~2.launcher.json") == "new receipt");
     CHECK(versions::read_record(fixture.root / "0.1.4/show23-pc-launcher.exe") == "old");
@@ -210,6 +214,9 @@ TEST(versioned_updates_reuse_a_verified_same_tag_slot_matching_the_download)
     }
     CHECK(folder == "0.1.4~2");
     CHECK(versions::read_record(fixture.root / "0.1.4~2.launcher.json") == "new receipt");
+    const auto reused = versions::verify(fixture.root / "0.1.4~2", versions::check_mode::full);
+    CHECK(reused);
+    CHECK(versions::read_record(fixture.root / "0.1.4~2.arrival.txt") == reused.fingerprint + '\n');
     CHECK(!fs::exists(fixture.root / "0.1.4.launcher.json"));
     CHECK(!fs::exists(fixture.root / "0.1.4~3"));
     CHECK(!fs::exists(fixture.root / "0.1.4.partial"));
@@ -272,4 +279,68 @@ TEST(versioned_updates_preserve_the_retry_gate_for_identical_failed_bytes)
     CHECK(folder.empty());
     CHECK(!fs::exists(fixture.root / "0.1.4~2"));
     CHECK(versions::read_record(fixture.root / "0.1.4.launcher.json") == "original receipt");
+}
+
+TEST(versioned_update_requests_wait_for_the_primary_to_select_the_running_fallback)
+{
+    update_fixture fixture;
+    const versions::request request{"a1389f39d3b84ece", "0.1.3", "switch-to-stable"};
+    const auto request_file = fixture.root / "request.txt";
+    versions::pointer stale;
+    stale.current = "0.1.4-beta.2";
+    stale.previous = "0.1.4-beta.1";
+    fixture.write("pointer.txt", versions::encode(stale));
+    fixture.write("pointer.bak", versions::encode(stale));
+    CHECK(update::try_request(fixture.root, stale.previous, request) == update::request_write::pending);
+    CHECK(!fs::exists(request_file));
+
+    versions::pointer repaired;
+    repaired.current = stale.previous;
+    fixture.write("pointer.bak", versions::encode(repaired));
+    const auto primary = fixture.root / "pointer.txt";
+    const auto lock = CreateFileW(primary.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(lock != INVALID_HANDLE_VALUE);
+    const auto pending = update::try_request(fixture.root, repaired.current, request);
+    if (lock != INVALID_HANDLE_VALUE) CloseHandle(lock);
+    CHECK(pending == update::request_write::pending);
+    CHECK(!fs::exists(request_file));
+
+    fixture.write("pointer.txt", versions::encode(repaired));
+    CHECK(update::try_request(fixture.root, repaired.current, request) == update::request_write::saved);
+    CHECK(versions::parse_request(versions::read_record(request_file)) == request);
+}
+
+TEST(versioned_update_requests_retry_when_windows_prevents_replacing_the_request)
+{
+    update_fixture fixture;
+    versions::pointer state;
+    state.current = "0.1.4-beta.1";
+    fixture.write("pointer.txt", versions::encode(state));
+    const versions::request old{"9f914a2f32cb60dd", "0.1.2", "switch-to-stable"};
+    const versions::request request{"a1389f39d3b84ece", "0.1.3", "switch-to-stable"};
+    fixture.write("request.txt", versions::encode(old));
+    const auto request_file = fixture.root / "request.txt";
+    const auto lock = CreateFileW(request_file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(lock != INVALID_HANDLE_VALUE);
+    const auto pending = update::try_request(fixture.root, state.current, request);
+    if (lock != INVALID_HANDLE_VALUE) CloseHandle(lock);
+    CHECK(pending == update::request_write::pending);
+    CHECK(versions::parse_request(versions::read_record(request_file)) == old);
+    CHECK(update::try_request(fixture.root, state.current, request) == update::request_write::saved);
+    CHECK(versions::parse_request(versions::read_record(request_file)) == request);
+}
+
+TEST(versioned_update_retry_requires_a_failure_for_the_verified_inventory)
+{
+    update_fixture fixture;
+    versions::pointer state;
+    state.current = "0.1.4-beta.1";
+    const versions::request request{"a1389f39d3b84ece", "0.1.4-beta.2", "retry"};
+    state.failed.push_back({request.trial, std::string(64, '1'), "failed to start"});
+    fixture.write("pointer.txt", versions::encode(state));
+    CHECK(update::try_request(fixture.root, state.current, request, std::string(64, '2')) ==
+        update::request_write::rejected);
+    CHECK(!fs::exists(fixture.root / "request.txt"));
+    CHECK(update::try_request(fixture.root, state.current, request, state.failed.front().fingerprint) ==
+        update::request_write::saved);
 }

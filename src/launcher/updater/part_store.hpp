@@ -49,7 +49,7 @@ namespace parts
                                           std::string_view launcher_version);
     bool stage_bundled_runtime(const std::filesystem::path& bundle, const std::filesystem::path& install,
                                std::string_view launcher_version);
-    // Empty on success, "in-use" if leased or an active-slot image is running, otherwise an error.
+    // Empty on success, "in-use" if leased, an active-slot image is running, or a replacement is blocked by a lock.
     std::string repair_bundled_runtime(const std::filesystem::path& bundle, const std::filesystem::path& install,
                                        std::string_view launcher_version);
     bool has_bundled_part(const installed_runtime& bundle, id part);

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <unordered_set>
 #include <utility>
+#include <utils/cryptography.hpp>
 #include <utils/finally.hpp>
 
 #ifdef SHOW23_UPDATE_FIXTURE
@@ -381,76 +382,140 @@ namespace parts
                 : runtime(root / "runtime" / release), manifests(root / "manifests" / release) {}
         };
 
-        struct repair_plan
+        bool sharing_error(const DWORD error)
         {
-            fs::path transaction;
-            std::string error;
-            bool pending{};
-            bool save_runtime{};
-            bool save_manifests{};
-            bool publish_manifests{};
-        };
+            return error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_USER_MAPPED_FILE;
+        }
 
-        repair_plan plan_repair(const fs::path& bundle, const fs::path& install, const installed_runtime& source,
-                                const installed_runtime& active, const std::string& release, std::string_view launcher_version)
+        bool previous_repair_establishes_version(const fs::path& install, const installed_runtime& source,
+                                                 const std::string& release, std::string_view launcher_version)
         {
-            if (marker_missing(install) || active.root.filename() != fs::path(release))
-                return {{}, "The active runtime release could not be established as " + release + "."};
-
-            const slot_paths live(install, release);
-            const auto live_runtime = directory_at(live.runtime);
-            const auto live_manifests = directory_at(live.manifests);
-            if (live_runtime == directory_state::invalid || live_manifests == directory_state::invalid)
-                return {{}, "The active runtime paths are invalid."};
-
+            // Older Repair could move the active manifests away before publishing their replacements.
+            // Require both the original version records and a verified staged runtime to recover that state.
             for (unsigned number = 1; number != 0; ++number)
             {
                 const auto transaction = install / "runtime" / (".repair-" + release + "-" + std::to_string(number));
-                const auto state = directory_at(transaction);
-                if (state == directory_state::missing)
-                {
-                    if (!versions_match(active, source))
-                        return {{}, "The active part versions could not be established as the bundled versions."};
-                    return {transaction, {}, false, live_runtime == directory_state::present, true, true};
-                }
-                if (state == directory_state::invalid) break;
-
-                // The replacement runtime is always published last. Completed transactions retain the originals.
-                const slot_paths staged(transaction / "new", release);
-                const slot_paths old(transaction / "old", release);
-                const auto stage_runtime = directory_at(staged.runtime);
-                const auto stage_manifests = directory_at(staged.manifests);
-                const auto old_runtime = directory_at(old.runtime);
-                const auto old_manifests = directory_at(old.manifests);
-                if (stage_runtime == directory_state::invalid || stage_manifests == directory_state::invalid ||
-                    old_runtime == directory_state::invalid || old_manifests == directory_state::invalid) break;
-                if (stage_runtime == directory_state::missing)
-                {
-                    if (stage_manifests == directory_state::missing && old_manifests == directory_state::present) continue;
-                    break;
-                }
-
-                const bool publish_manifests = stage_manifests == directory_state::present;
-                const bool save_manifests = old_manifests == directory_state::missing;
-                const bool save_runtime = live_runtime == directory_state::present;
-                if ((save_runtime && (old_runtime == directory_state::present || !save_manifests)) ||
-                    (save_manifests && (!publish_manifests || live_manifests != directory_state::present)) ||
-                    (!save_manifests && (publish_manifests == (live_manifests == directory_state::present)))) break;
-                const auto original = save_manifests ? active : read_runtime(transaction / "old", release);
-                if (!versions_match(original, source))
-                    return {{}, "The original runtime part versions could not be established as the bundled versions."};
-
-                const auto manifest_owner = publish_manifests ? transaction / "new" : install;
-                auto candidate = read_runtime(manifest_owner, release);
-                candidate.root = staged.runtime;
+                if (directory_at(transaction) != directory_state::present) break;
+                const auto staged = transaction / "new" / "runtime" / release;
+                if (directory_at(staged) != directory_state::present ||
+                    !versions_match(read_runtime(transaction / "old", release), source)) continue;
+                const installed_runtime candidate{staged, source.manifests, {}};
                 std::string verification;
-                if (!exact_manifests(manifest_owner / "manifests" / release, bundle / "manifests" / release) ||
-                    !exact_runtime_files(candidate) ||
-                    !verify_runtime(candidate, launcher_version, verification))
-                    return {{}, "The interrupted repair's replacement does not match the verified bundle."};
-                return {transaction, {}, true, save_runtime, save_manifests, publish_manifests};
+                if (exact_runtime_files(candidate) && verify_runtime(candidate, launcher_version, verification)) return true;
             }
-            return {{}, "The previous repair's folders could not be verified."};
+            return false;
+        }
+
+        std::string repair_error(const fs::path& install, const installed_runtime& source, const installed_runtime& active,
+                                 const std::string& release, std::string_view launcher_version)
+        {
+            if (active.root.filename() != fs::path(release))
+                return "The active runtime release could not be established as " + release + ".";
+            const slot_paths live(install, release);
+            if (directory_at(live.runtime) == directory_state::invalid || directory_at(live.manifests) == directory_state::invalid)
+                return "The active runtime paths are invalid.";
+            if (versions_match(active, source)) return {};
+
+            constexpr auto unknown = "The active part versions could not be established as the bundled versions.";
+            for (const auto part : runtime_parts)
+            {
+                const auto& actual = active.manifests[index(part)];
+                if (actual)
+                {
+                    if (actual->version != source.manifests[index(part)]->version) return unknown;
+                    continue;
+                }
+                const auto item = inspect(live.manifests / (std::string(name(part)) + ".json"), true, true);
+                if (item.error == path_error::access && sharing_error(GetLastError())) return "in-use";
+                if (item.error != path_error::none || item.present) return unknown;
+            }
+            return previous_repair_establishes_version(install, source, release, launcher_version) ? std::string{} : unknown;
+        }
+
+        bool same_manifest(const manifest& lhs, const manifest& rhs)
+        {
+            return lhs.part == rhs.part && lhs.version == rhs.version && lhs.channel == rhs.channel &&
+                lhs.min_launcher == rhs.min_launcher && lhs.compatibility == rhs.compatibility &&
+                std::ranges::is_permutation(lhs.files, rhs.files, [](const auto& left, const auto& right)
+                {
+                    return left.path == right.path && left.size == right.size && left.sha256 == right.sha256;
+                });
+        }
+
+        std::string repair_file(const fs::path& bundle, const fs::path& source, const fs::path& destination,
+                                std::uint64_t size, const std::string& digest, unsigned& replacement)
+        {
+            auto target = inspect(destination, true, true);
+            const auto open_error = GetLastError();
+            const auto filename = destination.filename();
+            if (target.error != path_error::none)
+                return target.error == path_error::access && sharing_error(open_error) ? "in-use" :
+                    "The repair target could not be opened: " + filename.string();
+            if (target.directory) return "The repair target is a directory: " + filename.string();
+            if (target.present && target.length == size)
+            {
+                const auto actual = sha256(target);
+                if (!actual) return sharing_error(GetLastError()) ? "in-use" :
+                    "The repair target could not be read: " + filename.string();
+                if (*actual == digest) return {};
+            }
+            if (target.links > 1) return "The repair target has multiple hard links: " + filename.string();
+
+            const auto input = inspect(source, false, true);
+            const auto parent = ensure_directory(destination.parent_path());
+            if (!input.present || input.directory || input.error != path_error::none || input.length != size ||
+                !usable_directory(parent)) return "The replacement file could not be prepared: " + filename.string();
+            const auto sequence = std::to_string(++replacement);
+            fixture_cut(bundle, "runtime-repair-before-file-" + sequence);
+
+            const auto temporary = parent.path / (".show23-repair-" + std::to_string(GetCurrentProcessId()) + "-" +
+                std::to_string(GetTickCount64()) + "-" + sequence);
+            const auto temporary_path = extended(temporary);
+            location output;
+            output.pins.emplace_back(CreateFileW(temporary_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            if (!output.pins.back()) return "A temporary repair file could not be created: " + filename.string();
+            auto cleanup = utils::finally([&]
+            {
+                output.pins.clear();
+                DeleteFileW(temporary_path.c_str());
+            });
+            output.present = true;
+            const auto file = output.pins.back().get();
+            std::array<char, 64 * 1024> bytes{};
+            while (output.length < size)
+            {
+                const auto length = static_cast<DWORD>((std::min<std::uint64_t>)(bytes.size(), size - output.length));
+                DWORD written = 0;
+                if (!read_at(input.pins.back().get(), output.length, std::span(bytes).first(length)) ||
+                    !WriteFile(file, bytes.data(), length, &written, nullptr) || written != length)
+                    return "The replacement file could not be copied: " + filename.string();
+                output.length += written;
+            }
+            if (!FlushFileBuffers(file) || sha256(output) != digest)
+                return "The replacement file could not be verified: " + filename.string();
+
+            if (!target.present)
+            {
+                const auto current = inspect(parent.path / filename, true, true);
+                if (current.error == path_error::access && sharing_error(GetLastError())) return "in-use";
+                if (current.error != path_error::none || current.present)
+                    return "The repair target changed during the copy: " + filename.string();
+            }
+            // Keep the parent folders pinned and release our file handles before asking Windows to replace the target.
+            // The rename can fail if an external process opened the target or loaded it as an image.
+            output.pins.clear();
+            if (target.present) target.pins.pop_back();
+            if (!MoveFileExW(temporary_path.c_str(), extended(parent.path / filename).c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            {
+                const auto error = GetLastError();
+                if (sharing_error(error) || (target.present && error == ERROR_ACCESS_DENIED)) return "in-use";
+                return "The verified replacement file could not be published: " + filename.string();
+            }
+            cleanup.cancel();
+            fixture_cut(bundle, "runtime-repair-after-file-" + sequence);
+            return {};
         }
     }
 
@@ -486,8 +551,8 @@ namespace parts
                 return {false, true, false, {}};
             return {false, false, false, "The runtime marker is missing and the existing folders could not be verified as a fresh stage."};
         }
-        const auto repair = plan_repair(bundle, install, source, active, release, launcher_version);
-        return {false, false, repair.error.empty(), verification};
+        const auto error = repair_error(install, source, active, release, launcher_version);
+        return {false, false, error.empty() || error == "in-use", verification};
     }
 
     bool stage_bundled_runtime(const fs::path& bundle, const fs::path& install, std::string_view launcher_version)
@@ -554,66 +619,47 @@ namespace parts
         if (!frozen_source(source, launcher_version)) return "The bundled runtime failed verification.";
         const auto release = source.root.filename().string();
         // Validate eligibility without creating a lock file on an unrecognized install.
-        const auto before = plan_repair(bundle, install, source, read_runtime(install), release, launcher_version);
-        if (!before.error.empty()) return before.error;
+        if (const auto error = repair_error(install, source, read_runtime(install), release, launcher_version); !error.empty())
+            return error;
         const runtime_lease lease(install, true);
         if (!lease) return lease.busy() ? "in-use" : "The runtime repair lease could not be opened.";
         const auto active = read_runtime(install);
         std::string verification;
         if (active.root.filename() == fs::path(release) && versions_match(active, source) &&
             verify_runtime(active, launcher_version, verification)) return {};
-        const auto plan = plan_repair(bundle, install, source, active, release, launcher_version);
-        if (!plan.error.empty()) return plan.error;
+        if (const auto error = repair_error(install, source, active, release, launcher_version); !error.empty()) return error;
+        if (runtime_process_running(active.root)) return "in-use";
 
-        const auto runtime = ensure_directory(install / "runtime");
-        const auto manifests = inspect(install / "manifests");
-        if (!usable_directory(runtime) || !usable_directory(manifests)) return "The runtime folders could not be opened for repair.";
-        if (!plan.pending)
+        unsigned replacement = 0;
+        for (const auto part : runtime_parts)
         {
-            const auto stage = create_stage(runtime.path);
-            if (stage.empty()) return "The replacement runtime folder could not be created.";
-            auto clean = utils::finally([&] { remove_stage(stage); });
-            const slot_paths old(stage / "old", release);
-            if (!stage_copy(bundle, source, stage / "new", release, launcher_version) ||
-                !usable_directory(ensure_directory(old.runtime.parent_path())) ||
-                !usable_directory(ensure_directory(old.manifests.parent_path())))
-                return "The replacement runtime could not be copied and verified.";
-            if (!move(stage, plan.transaction)) return "The verified replacement could not be prepared for publishing.";
-            clean.cancel();
+            const auto& expected = *source.manifests[index(part)];
+            const auto from = component_folder(source, part);
+            const auto to = component_folder(active, part);
+            for (const auto& file : expected.files)
+                if (const auto error = repair_file(bundle, from / file.path, to / file.path, file.size, file.sha256, replacement);
+                    !error.empty()) return error;
         }
 
         const slot_paths live(install, release);
-        const slot_paths old(plan.transaction / "old", release);
-        const slot_paths staged(plan.transaction / "new", release);
-        // Each rename is resumable, and no existing slot is removed.
-        if (plan.save_runtime)
+        const slot_paths expected(bundle, release);
+        for (const auto part : runtime_parts)
         {
-            const auto deadline = GetTickCount64() + 1500;
-            for (;;)
-            {
-                // A direct launch can start while Repair waits for a closed image to be released.
-                if (runtime_process_running(live.runtime)) return "in-use";
-                if (move(live.runtime, old.runtime)) break;
-                const auto error = GetLastError();
-                if ((error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) ||
-                    GetTickCount64() >= deadline)
-                    return "The original runtime could not be moved to its backup.";
-                Sleep(25);
-            }
-            fixture_cut(bundle, "runtime-repair-after-save-slot");
+            const auto& known = *source.manifests[index(part)];
+            const auto& installed = active.manifests[index(part)];
+            if (installed && same_manifest(*installed, known)) continue;
+            const auto filename = std::string(name(part)) + ".json";
+            const auto from = expected.manifests / filename;
+            const auto bytes = manifest_bytes(from);
+            std::string parse_error;
+            const auto parsed = bytes ? parse(*bytes, parse_error) : std::nullopt;
+            if (!parsed || !same_manifest(*parsed, known)) return "A bundled manifest changed during repair.";
+            utils::cryptography::sha256::stream manifest_hash;
+            manifest_hash.update(bytes->data(), bytes->size());
+            const auto digest = manifest_hash.finish_hex();
+            if (const auto error = repair_file(bundle, from, live.manifests / filename, bytes->size(), digest, replacement);
+                !error.empty()) return error;
         }
-        if (plan.save_manifests)
-        {
-            if (!move(live.manifests, old.manifests)) return "The original manifests could not be moved to their backup.";
-            fixture_cut(bundle, "runtime-repair-after-save-manifests");
-        }
-        if (plan.publish_manifests)
-        {
-            if (!move(staged.manifests, live.manifests)) return "The replacement manifests could not be published.";
-            fixture_cut(bundle, "runtime-repair-after-publish-manifests");
-        }
-        if (!move(staged.runtime, live.runtime)) return "The replacement runtime could not be published.";
-        fixture_cut(bundle, "runtime-repair-after-publish-slot");
         return verify_runtime(read_runtime(install), launcher_version, verification) ? std::string{} : verification;
     }
 }

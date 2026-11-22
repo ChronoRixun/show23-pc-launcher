@@ -89,9 +89,38 @@ namespace versions
     struct verification
     {
         std::string fingerprint, bad_file;
+        // Failure is either inconclusive, requires a trial, or identifies damaged content.
+        bool retryable{}, needs_confirmation{}, used_cached_metadata{};
         explicit operator bool() const { return bad_file.empty(); }
     };
     verification verify(const fs::path& folder, check_mode mode);
+    // A matching legacy stamp still requires a full check. Manual selection can suppress refresh writes.
+    verification verify_confirmed(const fs::path& root, std::string_view folder, bool refresh = true);
+    bool capture_confirmation(const fs::path& root, std::string_view folder, std::string_view expected_fingerprint);
+    std::string last_confirmed(const fs::path& root);
+
+    namespace detail
+    {
+        inline constexpr std::size_t confirmation_limit = 3 * 1024 * 1024;
+
+        struct file_stamp
+        {
+            std::string path;
+            std::uint64_t size{}, last_write{}, changed{}, volume{}, index{};
+            bool operator==(const file_stamp&) const = default;
+        };
+
+        struct confirmation
+        {
+            std::string fingerprint;
+            std::vector<file_stamp> files;
+            std::uint64_t confirmed_at{};
+        };
+
+        fs::path confirmation_path(const fs::path& root, std::string_view folder);
+        std::optional<confirmation> parse_confirmation(std::string_view data, std::string_view folder);
+        bool persist_confirmation(const fs::path& root, std::string_view folder, const confirmation& value);
+    }
 
     enum class pointer_source { primary, backup, empty };
     struct loaded_pointer

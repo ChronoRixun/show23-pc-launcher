@@ -321,7 +321,7 @@ namespace
         return path;
     }
 
-    std::pair<DWORD, std::string> prepare(const fs::path& top)
+    std::pair<DWORD, std::string> prepare(const fs::path& top, bool select_manual = false)
     {
         const auto exe = top / "show23-pc.exe";
         HANDLE reader{}, writer{};
@@ -334,7 +334,7 @@ namespace
         startup.dwFlags = STARTF_USESTDHANDLES;
         startup.hStdOutput = startup.hStdError = writer;
         PROCESS_INFORMATION info{};
-        auto cmd = bootstrap::quote(exe.native()) + L" --prepare";
+        auto cmd = bootstrap::quote(exe.native()) + (select_manual ? L" --select-manual" : L" --prepare");
         if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
             nullptr, top.c_str(), &startup, &info))
             throw std::runtime_error("Could not start disposable bootstrap.");
@@ -600,14 +600,95 @@ TEST(version_stable_choice_filters_beta_and_budget_preserves_confirmed_start)
     view.where = step::process_request;
     view.request_present = true;
     view.incoming = request{"0000000000000001", "0.1.4-beta.2", "retry"};
-    CHECK(decide(view).invalid_request);
+    CHECK(decide(view).save && decide(view).save->trial == view.incoming->trial);
     view.where = step::validate_names;
     view.state.trial = view.incoming->trial;
-    CHECK(decide(view).save && decide(view).save->trial.empty());
+    CHECK(!decide(view).save);
     view.stable_only = false;
     view.where = step::choose;
     view.launches = launch_limit - 1;
     CHECK(decide(view).next == action::launch_current && !decide(view).save);
     view.state.current.clear();
     CHECK(decide(view).next == action::launch_trial);
+}
+
+TEST(version_choice_filters_only_new_arrivals_and_preserves_known_recovery)
+{
+    auto view = populated();
+    view.stable_only = true;
+    view.where = step::arrival;
+    view.state.current.clear();
+    view.state.previous.clear();
+    view.recovered = "0.1.4-beta.2";
+    CHECK(decide(view).folder == view.recovered);
+    auto f = fixture{};
+    f.write("channel.txt", "stable\n");
+    CHECK(!read_channel(f.root));
+    CHECK(write_channel(f.root, update_channel::beta));
+    CHECK(read_record(f.root / "channel.txt") == "show23-pc channel 1\nbeta\n");
+}
+
+TEST(version_retryable_reads_keep_the_pointer_and_do_not_seal_a_failure)
+{
+    auto view = populated();
+    view.where = step::validate_names;
+    view.folders[view.state.current].bad_file = launcher_exe;
+    view.folders[view.state.current].retryable = true;
+    const auto fallback = decide(view);
+    CHECK(fallback.next == action::launch_current && fallback.folder == view.state.previous && !fallback.save);
+    view = populated();
+    view.where = step::arrival;
+    view.checked_arrival = "0.1.4~2";
+    view.arrival_result = {sha256("candidate"), "ui/main.html", true};
+    CHECK(decide(view).next == action::next && !decide(view).save);
+    view.arrival_result.bad_file.clear();
+    view.arrival_result.retryable = false;
+    CHECK(decide(view).save && decide(view).save->failed.empty());
+}
+
+TEST(version_previous_dialog_is_available_after_four_automatic_starts)
+{
+    auto view = populated();
+    view.launches = launch_limit;
+    CHECK(previous_for_dialog(view, view.state.current) == view.state.previous);
+    CHECK(previous_for_dialog(view, view.state.previous).empty());
+    view.folders[view.state.previous].bad_file = launcher_exe;
+    CHECK(previous_for_dialog(view, view.state.current).empty());
+}
+
+TEST(version_new_published_inventory_supersedes_an_older_pending_trial)
+{
+    auto view = populated();
+    view.where = step::arrival;
+    view.state.trial = "0.1.4";
+    CHECK(decide(view).next == action::next);
+    view.published_folders.insert("0.1.4~2");
+    CHECK(decide(view).folder == "0.1.4~2");
+    view.checked_arrival = "0.1.4~2";
+    view.arrival_result = view.folders.at(view.checked_arrival);
+    CHECK(decide(view).save && decide(view).save->trial == view.checked_arrival);
+    view.explicit_request = true;
+    CHECK(!decide(view).save && decide(view).next == action::next);
+}
+
+TEST(bootstrap_manual_selection_refuses_bad_current_and_does_not_write_records)
+{
+    fixture top;
+    fs::copy_file(test_program().parent_path() / "show23-pc-bootstrap.exe", top.root / "show23-pc.exe");
+    const auto layout = top.root / "show23-pc/versions";
+    fixture content;
+    content.complete("0.1.3");
+    content.complete("0.1.4");
+    fs::create_directories(layout.parent_path());
+    fs::copy(content.root, layout, fs::copy_options::recursive);
+    const pointer state{"0.1.4", "0.1.3"};
+    CHECK(commit(layout, state, state));
+    const auto seal = verify(layout / state.previous, check_mode::full).fingerprint;
+    CHECK(capture_confirmation(layout, state.previous, seal));
+    fs::remove(layout / state.current / launcher_exe);
+    const auto selected = prepare(top.root, true);
+    CHECK(selected.first == 0 && selected.second == "0.1.3\r\n");
+    CHECK(read_record(layout / "pointer.txt") == encode(state));
+    CHECK(read_record(layout / "pointer.bak") == encode(state));
+    CHECK(!fs::exists(layout / "request.txt") && !fs::exists(layout / notice_file));
 }

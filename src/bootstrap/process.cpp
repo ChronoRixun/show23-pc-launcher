@@ -51,6 +51,7 @@ namespace bootstrap
         {
             const std::wstring_view arg(argv[i]);
             if (arg == L"--prepare") result.prepare = true;
+            else if (arg == L"--select-manual") result.manual = true;
             else if (arg == L"-update-restart") result.update_restart = true;
             else if (arg == L"--bootstrap" || arg == L"--bootstrap-version" || arg == L"--folder" || arg == L"--confirm-event")
                 ++i;

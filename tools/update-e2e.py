@@ -20,6 +20,8 @@ import update_e2e_legacy
 import update_e2e_runtime
 import update_e2e_review
 import update_e2e_reuse
+import update_e2e_rules
+import update_e2e_publication
 import update_e2e_window
 
 OLD = "0.1.3-beta.1"
@@ -106,9 +108,9 @@ class Matrix:
     def __init__(self, options):
         self.__dict__.update(vars(options))
         self.root = self.work.resolve()
-        scopes = [(PROBES / milestone).resolve() for milestone in ("m4", "m5")]
+        scopes = [(PROBES / milestone).resolve() for milestone in ("m4", "m5", "m6")]
         if not any(scope in self.root.parents for scope in scopes):
-            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4 or m5.")
+            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4, m5 or m6.")
         self.root.mkdir()
         self.results = []
 
@@ -325,7 +327,7 @@ def channel_roundtrip(ctx, redownload):
     copy.start()
     copy.stage_target(BETA)
     with feed(BETA, release_files(BETA, ctx.next_beta.read_bytes())) as (port, beta_requests, _):
-        copy.start(port=port, action="update")
+        copy.start(port=port, action="update", SHOW23_FIXTURE_CHANNEL="beta")
     expect_current(copy, BETA, STABLE)
     stray = "0.1.4-beta.0"
     # Retain a Beta other than previous, as would happen after several Beta updates.
@@ -347,9 +349,9 @@ def channel_roundtrip(ctx, redownload):
     copy.start()
     assert expect_current(copy, STABLE, BETA) == pointer
     assert (copy.versions / stray).is_dir()
+    assert (copy.versions / "channel.txt").read_bytes() == b"show23-pc channel 1\nstable\n"
     return {"betaRequests": beta_requests, "stableRequests": stable_requests, "consumedRequest": request,
-            "reopenedOnStable": True,
-            "pointer": pointer, **copy.check(except_settings=("launcher-update-channel",))}
+            "reopenedOnStable": True, "pointer": pointer, **copy.check()}
 
 
 def manual_forwarders(ctx):
@@ -365,7 +367,7 @@ def manual_forwarders(ctx):
 
     assert not copy.pointer.exists()
     fresh = pick()
-    assert fresh == f"{OLD}:input with spaces" and f"trial {OLD}\n" in copy.state()
+    assert fresh == f"{OLD}:input with spaces" and not copy.pointer.exists()
     copy.start()
     # Present an arrival and invoke production --prepare, which may select it as trial,
     # while the manual command must still dispatch to the confirmed current.
@@ -427,6 +429,8 @@ def run(ctx):
                    lambda cut=cut, committed=committed: updater_cut(ctx, cut, committed))
     update_e2e_boot.run(ctx)
     update_e2e_review.run(ctx)
+    update_e2e_rules.run(ctx, Copy, release_files, STABLE, BETA)
+    update_e2e_publication.run(ctx, Copy, release_files, feed, expect_current, transient, write_files, OLD, NEW, STABLE, BETA)
     for case, same, competing in (("E16-mismatch", False, False), ("E16-identical", True, False),
                                   ("E16-competing", True, True)):
         ctx.record(case, "A downloaded receipt only identifies identical verified bytes; the selected bytes start.",

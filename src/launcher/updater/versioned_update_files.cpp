@@ -184,6 +184,25 @@ namespace versioned_update_files
         return result;
     }
 
+    request_write try_request(const fs::path& root, std::string_view running,
+        const versions::request& request, std::string_view retry_fingerprint)
+    {
+        const auto pointer = versions::load_pointer(root);
+        if (pointer.source != versions::pointer_source::primary || pointer.value.current != running)
+            return request_write::pending;
+        if (request.trial == running || (request.reason == "retry" &&
+            !std::ranges::any_of(pointer.value.failed, [&](const auto& failure)
+                { return failure.folder == request.trial && failure.fingerprint == retry_fingerprint; })))
+            return request_write::rejected;
+
+        const auto record = versions::encode(request);
+        if (!versions::parse_request(record)) return request_write::rejected;
+        if (versions::write_record(root / "request.txt", record)) return request_write::saved;
+        const auto error = GetLastError();
+        return error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_ACCESS_DENIED
+            ? request_write::pending : request_write::rejected;
+    }
+
     void remove_transient(const fs::path& folder)
     {
         if (!transient_name(folder.filename().string()) || !plain_directory(folder)) return;
@@ -320,6 +339,17 @@ namespace versioned_update_files
         if (!versions::plain_path(receipt, true) || !versions::plain_path(manifest) ||
             !MoveFileExW(manifest.c_str(), receipt.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             return "Could not save the verified release manifest.";
+
+        if (arrival)
+        {
+            // This record is actionable only if the complete folder exists with this seal.
+            // Write it before the rename so interruption after publication preserves priority.
+            const auto publication = root_ / (name + ".arrival.txt");
+            const auto temp = root_ / (name + ".arrival.txt.tmp");
+            if (versions::plain_path(temp)) DeleteFileW(temp.c_str());
+            if (!versions::write_record(publication, fingerprint_ + '\n'))
+                return "Could not record the verified launcher arrival.";
+        }
 
         if (!reuse)
         {
