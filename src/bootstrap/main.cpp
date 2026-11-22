@@ -1,0 +1,345 @@
+#include "process.hpp"
+#include "ui.hpp"
+#include <versions/decision.hpp>
+#include <versions/instance.hpp>
+#include <utils/named_mutex.hpp>
+
+#include <algorithm>
+#include <chrono>
+
+namespace bootstrap
+{
+    using namespace versions;
+    using namespace std::chrono_literals;
+
+    namespace
+    {
+        constexpr DWORD confirmation_timeout = 120000;
+        constexpr DWORD restart = 75;
+        struct session
+        {
+            fs::path executable, root;
+            arguments args;
+            disk_view view;
+            bool retry_used{};
+            std::string newest;
+
+            void check(const std::string& folder)
+            {
+                if (folder.empty() || view.folders.contains(folder)) return;
+                const auto version = folder_version(folder);
+                if (newest.empty() || compare(version, newest) > 0) newest = version;
+                view.folders[folder] = verify(root / folder, check_mode::quick);
+            }
+
+            decision apply(decision selected)
+            {
+                if (selected.save)
+                {
+                    if (!commit(root, view.state, *selected.save))
+                    {
+                        const auto error = GetLastError();
+                        log(root, "couldn't record the update's start or state: " + std::to_string(error));
+                        const auto fallback = failed_commit(view);
+                        if (fallback.next == action::dialog_write && !args.prepare) write_dialog(error);
+                        return fallback;
+                    }
+                    view.state = *selected.save;
+                }
+                if (selected.invalid_request) log(root, "invalid-request");
+                if (selected.remove_request && plain_path(root / "request.txt"))
+                    DeleteFileW((root / "request.txt").c_str());
+                return selected;
+            }
+
+            void write_dialog(DWORD error)
+            {
+                wchar_t message[512]{};
+                const auto detail = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                    nullptr, error, 0, message, static_cast<DWORD>(std::size(message)), nullptr)
+                    ? std::wstring(message) : L"Windows error " + std::to_wstring(error);
+                dialog(root, L"show23-pc can't write the version record",
+                    root.native() + L"\n" + detail +
+                    L"\nMove the launcher folder somewhere you can write to, outside Program Files.",
+                    newest, false, {}, false, false);
+            }
+
+            decision load()
+            {
+                const auto loaded = load_pointer(root);
+                view.state = loaded.value;
+                view.folders.clear();
+                newest.clear();
+                view.last_reason.clear();
+                view.rejected_arrivals.clear();
+                view.prepare = args.prepare;
+                if (loaded.source == pointer_source::empty) log(root, "rebuilt");
+                for (const auto* name : {"pointer.txt.tmp", "pointer.bak.tmp", "request.txt.tmp"})
+                    if (plain_path(root / name)) DeleteFileW((root / name).c_str());
+                if (!repair_pointer(root, loaded)) log(root, "could not repair the version record");
+
+                for (const auto* name : {&view.state.current, &view.state.previous, &view.state.trial}) check(*name);
+                view.where = step::validate_names;
+                if (auto selected = apply(decide(view)); selected.next != action::next) return selected;
+
+                const auto request_path = root / "request.txt";
+                const auto bytes = read_record(request_path);
+                std::error_code error;
+                view.request_present = fs::exists(fs::symlink_status(request_path, error));
+                view.incoming = parse_request(bytes);
+                if (view.incoming) check(view.incoming->trial);
+                view.where = step::process_request;
+                return apply(decide(view));
+            }
+
+            decision arrival()
+            {
+                if (!view.state.trial.empty()) return {action::next};
+                std::error_code error;
+                for (fs::directory_iterator it(root, error), end; !error && it != end; it.increment(error))
+                {
+                    const auto filename = narrow(it->path().filename().native());
+                    std::error_code attributes_error;
+                    if (valid_folder(filename) && plain_path(it->path()) && it->is_directory(attributes_error))
+                        check(filename);
+                }
+                view.where = step::arrival;
+                view.checked_arrival.clear();
+                for (auto selected = decide(view); selected.next == action::scan; selected = decide(view))
+                {
+                    view.checked_arrival = selected.folder;
+                    view.arrival_result = check_arrival(root / selected.folder, args.prepare);
+                    if (view.arrival_result)
+                    {
+                        view.last_reason.clear();
+                        return apply(decide(view));
+                    }
+                    log(root, selected.folder + ": damaged:" + view.arrival_result.bad_file);
+                    selected = apply(decide(view));
+                    if (selected.next != action::next) return selected;
+                    view.rejected_arrivals.insert(view.checked_arrival);
+                }
+                return {action::next};
+            }
+
+            decision choose()
+            {
+                view.where = step::choose;
+                return apply(decide(view));
+            }
+
+            bool retry()
+            {
+                view.where = step::retry;
+                const auto choice = decide(view);
+                std::wstring detail = L"No complete launcher version could open.";
+                for (const auto& failure : view.state.failed)
+                    detail += L"\n" + widen(failure.folder + ": " + failure.reason);
+                if (dialog(root, L"show23-pc could not open", std::move(detail), newest,
+                    false, {}, !retry_used && view.launches < launch_limit &&
+                    !choice.folder.empty()) != answer::retry) return false;
+                retry_used = true;
+                const auto id = request_id();
+                if (!id.empty() && write_record(root / "request.txt", encode(request{id, choice.folder, "retry"}))) return true;
+                write_dialog(id.empty() ? ERROR_GEN_FAILURE : GetLastError());
+                return false;
+            }
+
+            DWORD launch(const decision& selected)
+            {
+                auto folder = selected.folder;
+                auto trial = selected.next == action::launch_trial;
+                bool use_previous = false;
+                for (;;)
+                {
+                    ++view.launches;
+                    log(root, "launch " + folder + (trial ? " (trial)" : ""));
+                    child app;
+                    const auto error = app.launch(root / folder / launcher_exe, executable, folder, trial, args.flags);
+                    DWORD code{};
+                    bool timeout = false, confirmed = false;
+                    std::string reason;
+                    if (error) reason = "could-not-start:" + std::to_string(error);
+                    else
+                    {
+                        const HANDLE waiting[]{app.confirm.get(), app.process.get()};
+                        const auto event = WaitForMultipleObjects(2, waiting, FALSE, confirmation_timeout);
+                        timeout = event == WAIT_TIMEOUT;
+                        confirmed = event == WAIT_OBJECT_0;
+                        if (event == WAIT_FAILED) reason = "wait-failed:" + std::to_string(GetLastError());
+                        if (trial && (timeout || event == WAIT_FAILED))
+                        {
+                            if (timeout) reason = "unconfirmed-timeout";
+                            if (!TerminateJobObject(app.job.get(), timeout ? ERROR_TIMEOUT : ERROR_PROCESS_ABORTED) ||
+                                WaitForSingleObject(app.process.get(), 5000) != WAIT_OBJECT_0)
+                            {
+                                log(root, folder + ": " + reason + "; could not stop the trial");
+                                dialog(root, L"show23-pc could not stop the trial",
+                                    L"Close the trial before reopening the launcher.", newest);
+                                return 1;
+                            }
+                        }
+                        if (!confirmed && !timeout && reason.empty())
+                        {
+                            GetExitCodeProcess(app.process.get(), &code);
+                            if (!trial && !code) return 0;
+                            reason = "exit:" + std::to_string(code);
+                        }
+                    }
+                    if (!confirmed && trial)
+                    {
+                        view.last_reason = reason;
+                        log(root, folder + ": " + reason);
+                        return restart;
+                    }
+                    if (!confirmed)
+                    {
+                        const auto previous = !use_previous && view.launches < launch_limit
+                            ? view.state.previous : std::string{};
+                        const auto choice = dialog(root, L"show23-pc " + widen(folder_version(folder)) + L" did not open",
+                            timeout ? L"No window after 120 seconds." : widen(reason), newest, timeout, previous);
+                        if (choice == answer::wait)
+                        {
+                            const HANDLE waiting[]{app.confirm.get(), app.process.get()};
+                            const auto event = WaitForMultipleObjects(2, waiting, FALSE, INFINITE);
+                            confirmed = event == WAIT_OBJECT_0;
+                            if (!confirmed)
+                            {
+                                GetExitCodeProcess(app.process.get(), &code);
+                                if (code) dialog(root, L"show23-pc did not open", L"Exit code " + std::to_wstring(code), newest);
+                                return code;
+                            }
+                        }
+                        else if (choice == answer::previous)
+                        {
+                            // Never start an alternate while a timed-out current still owns the app mutex.
+                            if (timeout && WaitForSingleObject(app.process.get(), 0) != WAIT_OBJECT_0)
+                            {
+                                dialog(root, L"The current launcher is still running",
+                                    L"Close it before starting the previous version.", newest);
+                                return 1;
+                            }
+                            use_previous = true;
+                            folder = previous;
+                            continue;
+                        }
+                        else return 1;
+                    }
+
+                    if (trial)
+                    {
+                        view.where = step::confirmed;
+                        const auto promote = decide(view);
+                        bool recorded{};
+                        for (unsigned attempt = 0; promote.save && attempt < 3; ++attempt)
+                        {
+                            if (commit(root, view.state, *promote.save))
+                            {
+                                view.state = *promote.save;
+                                view.last_reason.clear();
+                                recorded = true;
+                                break;
+                            }
+                            if (attempt != 2) Sleep(500);
+                        }
+                        log(root, recorded ? "confirmed " + folder : "could not record confirmation for " + folder);
+                    }
+                    WaitForSingleObject(app.process.get(), INFINITE);
+                    if (!GetExitCodeProcess(app.process.get(), &code)) return 1;
+                    return code;
+                }
+            }
+
+            int run()
+            {
+                unsigned restarts{};
+                for (;;)
+                {
+                    auto selected = load();
+                    if (selected.next == action::dialog_write) return 1;
+                    for (;;)
+                    {
+                        if (selected.next == action::next) selected = arrival();
+                        if (selected.next == action::next) selected = choose();
+                        if (selected.next == action::next) continue;
+                        if (selected.next == action::dialog_write) return 1;
+                        if (selected.next == action::prepared)
+                        {
+                            if (print_folder(selected.folder)) return 0;
+                            return 1;
+                        }
+                        if (selected.next == action::dialog_none)
+                        {
+                            if (!args.prepare && retry()) break;
+                            if (args.prepare) log(root, "prepare: no runnable version was found");
+                            return 1;
+                        }
+                        if (selected.next == action::dialog_current)
+                        {
+                            dialog(root, L"show23-pc did not open", L"The startup attempt limit was reached.", newest);
+                            return 1;
+                        }
+                        const auto counted = view.state.trial;
+                        const auto code = launch(selected);
+                        if (code != restart) return static_cast<int>(code);
+                        if (!counted.empty() && view.state.trial == counted && !view.last_reason.empty())
+                        {
+                            selected = choose();
+                            continue;
+                        }
+                        if (++restarts <= 3 && view.launches < launch_limit) break;
+                        dialog(root, L"show23-pc could not restart", L"The startup attempt limit was reached.", newest);
+                        return 1;
+                    }
+                }
+            }
+        };
+    }
+
+    int run()
+    {
+        std::wstring path(32768, L'\0');
+        const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (!length || length >= path.size()) return 1;
+        path.resize(length);
+        session app;
+        app.executable = path;
+        app.root = app.executable.parent_path() / "show23-pc/versions";
+        app.args = parse_arguments();
+
+        utils::named_mutex bootstrap_lock(bootstrap_mutex_name);
+        if (!bootstrap_lock.try_lock(app.args.update_restart ? 30s : 3s))
+        {
+            if (!app.args.prepare && !activate_running_window()) MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        utils::named_mutex child_lock(launcher_mutex_name);
+        if (!child_lock.try_lock())
+        {
+            if (!app.args.prepare && !activate_running_window()) MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        child_lock.unlock();
+
+        if (!plain_path(app.root))
+        {
+            if (!app.args.prepare)
+                dialog(app.root, L"show23-pc could not open", L"No readable versions folder was found. Re-extract the launcher ZIP.", {});
+            return 1;
+        }
+        return app.run();
+    }
+}
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
+{
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    try { return bootstrap::run(); }
+    catch (...)
+    {
+        if (bootstrap::parse_arguments().prepare) return 1;
+        MessageBoxW(nullptr, L"show23-pc could not read its version records.\nYour games, saves and settings are not affected.",
+            L"show23-pc", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+}

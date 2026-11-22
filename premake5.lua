@@ -183,11 +183,32 @@ end
 dependencies.imports()
 
 
+project "show23-pc-bootstrap"
+kind "WindowedApp"
+language "C++"
+targetname "show23-pc-bootstrap"
+defines {"NOMINMAX", "UNICODE", "_UNICODE"}
+includedirs {"./src/common", "./src/launcher", "%{prj.location}/src"}
+resincludedirs {"$(ProjectDir)src"}
+files {"./src/bootstrap/**.hpp", "./src/bootstrap/**.cpp", "./src/common/versions/**.hpp",
+       "./src/common/versions/**.cpp", "./src/common/utils/named_mutex.cpp",
+       "./src/launcher/resource/resource.rc", "./src/launcher/resource/app.manifest",
+       "./src/launcher/resource/icon.ico"}
+links {"user32", "shell32", "comctl32", "bcrypt"}
+prebuildcommands { 'pushd "%{_MAIN_SCRIPT_DIR}"', '"' .. _PREMAKE_COMMAND .. '" generate-buildinfo', "popd" }
+linkoptions {"/DYNAMICBASE", "/NXCOMPAT", "/HIGHENTROPYVA", "/GUARD:CF", "/CETCOMPAT"}
+buildoptions {"/guard:cf"}
+filter "configurations:Release"
+    optimize "Size"
+    flags {"LinkTimeOptimization"}
+filter {}
+
 -- Native unit tests are independent of the browser and exercise synthetic fixtures.
 project "show23-pc-tests"
+dependson {"show23-pc-bootstrap"}
 kind "ConsoleApp"
 language "C++"
-files {"./src/tests/**.hpp", "./src/tests/**.cpp",
+files {"./src/tests/**.hpp", "./src/tests/**.cpp", "./src/bootstrap/process.cpp",
        "./src/launcher/updater/swap_retry.cpp", "./src/launcher/updater/release_channel.cpp",
        "./src/launcher/updater/release_resolver.cpp", "./src/launcher/updater/part_manifest.cpp",
        "./src/launcher/support/redact.cpp", "./src/launcher/support/report_rules.cpp",

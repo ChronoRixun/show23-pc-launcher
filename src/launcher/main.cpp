@@ -3,6 +3,7 @@
 #include "commands/commands.hpp"
 #include "show23/shortcuts.hpp"
 #include "updater/launcher_update.hpp"
+#include <versions/instance.hpp>
 
 #include <utils/flags.hpp>
 #include <utils/named_mutex.hpp>
@@ -96,7 +97,7 @@ namespace
 
     utils::named_mutex& singleton_mutex()
     {
-        static utils::named_mutex mutex{"show23-pc"};
+        static utils::named_mutex mutex{versions::bootstrap_mutex_name};
         return mutex;
     }
 
@@ -141,40 +142,7 @@ namespace
         commands::stop_workers();
     }
 
-    HWND find_running_window()
-    {
-        HWND result{};
-        EnumWindows([](HWND window, LPARAM context) -> BOOL
-        {
-            // The browser handler puts this property on the launcher window and its
-            // children. Match the root only, regardless of the executable's folder.
-            if (GetPropA(window, "show23_root_window") != window ||
-                GetPropA(window, "show23_closing") || !IsWindowVisible(window)) return TRUE;
-            *reinterpret_cast<HWND*>(context) = window;
-            return FALSE;
-        }, reinterpret_cast<LPARAM>(&result));
-        return result;
-    }
 
-    bool activate_running_window()
-    {
-        const auto deadline = std::chrono::steady_clock::now() + 800ms;
-        do
-        {
-            if (const auto window = find_running_window())
-            {
-                if (IsIconic(window)) ShowWindowAsync(window, SW_RESTORE);
-                else
-                {
-                    SetForegroundWindow(window);
-                    const auto foreground = GetForegroundWindow();
-                    if (foreground && GetAncestor(foreground, GA_ROOTOWNER) == window) return true;
-                }
-            }
-            std::this_thread::sleep_for(40ms);
-        } while (std::chrono::steady_clock::now() < deadline);
-        return false;
-    }
 }
 
 int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
@@ -208,7 +176,7 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
 
         if (!try_become_singleton())
         {
-            if (!activate_running_window())
+            if (!versions::activate_running_window())
                 MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
             return 0;
         }

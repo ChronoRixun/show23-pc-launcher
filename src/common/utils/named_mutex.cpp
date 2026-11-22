@@ -1,5 +1,5 @@
 #include "named_mutex.hpp"
-#include "nt.hpp"
+#include <Windows.h>
 
 namespace utils
 {

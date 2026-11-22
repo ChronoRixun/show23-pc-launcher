@@ -3,6 +3,7 @@
 #include "check_inputs_cli.hpp"
 #include "package_setup_tests.hpp"
 #include "play_session_tests.hpp"
+#include "versions_tests.hpp"
 #include "show23/card_import.hpp"
 #include "updater/part_store.hpp"
 #include <utils/flags.hpp>
@@ -105,6 +106,7 @@ namespace
 int wmain(const int argc, wchar_t** argv)
 {
     const auto args = std::span(argv, static_cast<std::size_t>(argc));
+    if (const auto fake = fake_bootstrap_child(args)) return *fake;
     if (const auto fake = fake_play_child(args)) return *fake;
     if (const auto fake = fake_unpacker(args)) return *fake;
     if (argc > 1 && std::wstring_view(argv[1]) == L"--import-cards") return card_import_cli(args.subspan(1));
