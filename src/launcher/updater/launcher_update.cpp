@@ -48,7 +48,7 @@ namespace launcher_update
             std::optional<release> latest;
             channel_refresh::ticket selection;
             channel latest_channel = channel::stable;
-            bool from_cache{}, downgrade{}, retrying{};
+            bool from_cache{}, downgrade{}, retrying{}, request_deferred{};
             std::uint64_t done{}, total{};
             std::string cache_error, error, install_error, ready_folder, request_id;
             std::chrono::system_clock::time_point checked{};
@@ -220,33 +220,37 @@ namespace launcher_update
             return versions::compare(state_.latest->version, current) > 0 ? "available" : "up-to-date";
         }
 
-        bool wait_for_request_locked(std::unique_lock<std::mutex>& lock, const std::string& folder,
+        std::string wait_for_request_locked(std::unique_lock<std::mutex>& lock, const std::string& folder,
             std::string reason, const auto& still_selected, std::string_view retry_fingerprint = {})
         {
+            constexpr auto unsaved = "Could not save the version choice. The current version is still active.";
             const auto& layout = versioned_start::layout();
             const auto id = versions::request_id();
-            if (id.empty() || !versions::valid_folder(folder)) return false;
+            if (id.empty() || !versions::valid_folder(folder)) return unsaved;
             const versions::request request{id, folder, std::move(reason)};
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
             bool waiting{};
             while (!stopping_ && still_selected())
             {
-                const auto result = files::try_request(layout.versions, layout.folder, request, retry_fingerprint);
-                if (result == files::request_write::saved)
+                const auto now = std::chrono::steady_clock::now();
+                const auto defer = now >= deadline;
+                const auto result = files::try_request(layout.versions, layout.folder, request, retry_fingerprint, defer);
+                if (result == files::request_write::saved || result == files::request_write::deferred)
                 {
                     state_.request_id = id;
-                    return true;
+                    state_.request_deferred = result == files::request_write::deferred;
+                    return {};
                 }
-                if (result == files::request_write::rejected) return false;
+                if (result == files::request_write::rejected || defer) return unsaved;
                 if (!waiting)
                 {
                     utils::logger::write("launcher update: waiting to record the update request for {}", folder);
                     waiting = true;
                 }
-                // Bootstrap repairs a stale record while the confirmed fallback is still running.
-                // Release the updater lock so Settings, status polling and shutdown remain usable.
-                work_ready_.wait_for(lock, std::chrono::milliseconds(250));
+                // Release the updater lock while bootstrap tries to save the fallback pointer.
+                work_ready_.wait_until(lock, (std::min)(deadline, now + std::chrono::milliseconds(250)));
             }
-            return false;
+            return "The launcher update was cancelled.";
         }
 
         void ready_locked(std::string folder)
@@ -335,8 +339,8 @@ namespace launcher_update
                     if (!admission.empty()) return admission;
                     std::unique_lock lock(mutex_);
                     if (!still_selected()) return "The launcher update was cancelled.";
-                    if (!wait_for_request_locked(lock, *reuse, "switch-to-stable", still_selected))
-                        return "Could not request the switch to Stable.";
+                    if (auto error = wait_for_request_locked(lock, *reuse, "switch-to-stable", still_selected); !error.empty())
+                        return error;
                     ready_locked(*reuse);
                     return {};
                 }
@@ -409,8 +413,11 @@ namespace launcher_update
             versions::fixture::kill_at(root.parent_path(), "U6-before-cleanup");
             discard_download();
             clean.cancel();
-            if (downgrade && !wait_for_request_locked(finish, folder, "switch-to-stable", still_selected))
-                return "Could not request the switch to Stable.";
+            if (downgrade)
+            {
+                if (auto error = wait_for_request_locked(finish, folder, "switch-to-stable", still_selected); !error.empty())
+                    return error;
+            }
             ready_locked(folder);
             finish.unlock();
             utils::logger::write("launcher update: verified {} (SHA-256 {})", folder, sha256);
@@ -499,6 +506,7 @@ namespace launcher_update
         state_.total = state_.latest->size;
         state_.error.clear();
         state_.install_error.clear();
+        state_.request_deferred = false;
         queue_locked([latest = *state_.latest, selection = state_.selection, back]
         {
             std::string error;
@@ -549,22 +557,23 @@ namespace launcher_update
         state_.done = state_.total = 0;
         state_.error.clear();
         state_.install_error.clear();
+        state_.request_deferred = false;
         queue_locked([root = layout.versions, folder]
         {
             versions::verification valid;
             try { valid = versions::verify(root / folder, versions::check_mode::full); }
             catch (const std::exception&) { valid.bad_file = "version.txt"; }
             std::unique_lock state_lock(mutex_);
-            const auto saved = valid && wait_for_request_locked(state_lock, folder, "retry",
-                [] { return true; }, valid.fingerprint);
+            auto error = valid ? wait_for_request_locked(state_lock, folder, "retry",
+                [] { return true; }, valid.fingerprint) :
+                "That launcher version failed verification (" + valid.bad_file + ").";
             state_.retrying = false;
-            if (saved)
+            if (error.empty())
                 ready_locked(folder);
             else
             {
                 state_.state = offered_state_locked();
-                state_.install_error = valid ? "Could not request another start of that launcher version." :
-                    "That launcher version failed verification (" + valid.bad_file + ").";
+                state_.install_error = std::move(error);
             }
         });
         return true;
@@ -617,6 +626,7 @@ namespace launcher_update
         add("error", state_.error);
         add("installError", state_.install_error);
         add("readyVersion", versions::folder_version(state_.ready_folder));
+        out.AddMember("requestDeferred", state_.state == "ready" && state_.request_deferred, allocator);
         add("updatedTo", updated ? current : std::string{});
         const auto checked = std::chrono::duration_cast<std::chrono::milliseconds>(state_.checked.time_since_epoch()).count();
         out.AddMember("checkedAt", static_cast<std::int64_t>(checked), allocator);

@@ -344,3 +344,49 @@ TEST(versioned_update_retry_requires_a_failure_for_the_verified_inventory)
     CHECK(update::try_request(fixture.root, state.current, request, state.failed.front().fingerprint) ==
         update::request_write::saved);
 }
+
+TEST(versioned_update_deadline_defers_a_valid_choice_without_writing_the_pointer)
+{
+    update_fixture fixture;
+    versions::pointer stale;
+    stale.current = "0.1.4-beta.2";
+    stale.previous = "0.1.4-beta.1";
+    const auto fingerprint = std::string(64, '1');
+    const versions::request retry{"0123456789abcdef", "0.1.4-beta.3", "retry"};
+    stale.failed.push_back({retry.trial, fingerprint, "failed to start"});
+    const auto pointer = versions::encode(stale);
+    fixture.write("pointer.txt", pointer);
+    fixture.write("pointer.bak", pointer);
+
+    const versions::request choice{"a1389f39d3b84ece", "0.1.3", "switch-to-stable"};
+    const auto primary = fixture.root / "pointer.txt";
+    const auto held = CreateFileW(primary.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(held != INVALID_HANDLE_VALUE);
+    if (held == INVALID_HANDLE_VALUE) return;
+    const auto file = fixture.root / "request.txt";
+    CHECK(update::try_request(fixture.root, stale.previous, choice) == update::request_write::pending);
+    CHECK(!fs::exists(file));
+    CHECK(update::try_request(fixture.root, stale.previous, choice, {}, true) == update::request_write::deferred);
+    CHECK(versions::parse_request(versions::read_record(file)) == choice);
+    CHECK(versions::read_record(primary) == pointer);
+    CHECK(versions::read_record(fixture.root / "pointer.bak") == pointer);
+
+    const auto held_request = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(held_request != INVALID_HANDLE_VALUE);
+    if (held_request != INVALID_HANDLE_VALUE)
+    {
+        auto later = choice;
+        later.id = "9f914a2f32cb60dd";
+        CHECK(update::try_request(fixture.root, stale.previous, later, {}, true) == update::request_write::pending);
+        CHECK(versions::parse_request(versions::read_record(file)) == choice);
+        CloseHandle(held_request);
+    }
+    CHECK(update::try_request(fixture.root, stale.previous, retry, std::string(64, '2'), true) ==
+        update::request_write::rejected);
+    CHECK(versions::parse_request(versions::read_record(file)) == choice);
+    CHECK(update::try_request(fixture.root, stale.previous, retry, fingerprint, true) ==
+        update::request_write::deferred);
+    CHECK(versions::parse_request(versions::read_record(file)) == retry);
+    CHECK(versions::read_record(primary) == pointer);
+    CloseHandle(held);
+}

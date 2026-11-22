@@ -185,11 +185,11 @@ namespace versioned_update_files
     }
 
     request_write try_request(const fs::path& root, std::string_view running,
-        const versions::request& request, std::string_view retry_fingerprint)
+        const versions::request& request, std::string_view retry_fingerprint, bool defer)
     {
         const auto pointer = versions::load_pointer(root);
-        if (pointer.source != versions::pointer_source::primary || pointer.value.current != running)
-            return request_write::pending;
+        const auto selected = pointer.source == versions::pointer_source::primary && pointer.value.current == running;
+        if (!selected && !defer) return request_write::pending;
         if (request.trial == running || (request.reason == "retry" &&
             !std::ranges::any_of(pointer.value.failed, [&](const auto& failure)
                 { return failure.folder == request.trial && failure.fingerprint == retry_fingerprint; })))
@@ -197,7 +197,8 @@ namespace versioned_update_files
 
         const auto record = versions::encode(request);
         if (!versions::parse_request(record)) return request_write::rejected;
-        if (versions::write_record(root / "request.txt", record)) return request_write::saved;
+        if (versions::write_record(root / "request.txt", record))
+            return selected ? request_write::saved : request_write::deferred;
         const auto error = GetLastError();
         return error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_ACCESS_DENIED
             ? request_write::pending : request_write::rejected;

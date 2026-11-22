@@ -16,9 +16,9 @@ namespace versioned_update_files
     void cleanup(const std::filesystem::path& root);
     void remove_transient(const std::filesystem::path& folder);
 
-    enum class request_write { saved, pending, rejected };
+    enum class request_write { saved, deferred, pending, rejected };
     request_write try_request(const std::filesystem::path& root, std::string_view running,
-        const versions::request& request, std::string_view retry_fingerprint = {});
+        const versions::request& request, std::string_view retry_fingerprint = {}, bool defer = false);
 
     class partial_slot
     {

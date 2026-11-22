@@ -143,26 +143,33 @@ namespace versions
         {
             if (!next.trial.empty() && view.explicit_request) return {action::next};
             const auto pending = lookup(view, next.trial);
-            std::string candidate;
-            for (const auto& [name, result] : view.folders)
+            const auto eligible = [&](std::string_view name, const verification& result)
             {
-                const auto recovering = next.trial.empty() && next.current.empty() && name == view.recovered;
                 if (!next.trial.empty() &&
                     (!view.published_folders.contains(name) || folder_version(name) != folder_version(next.trial) ||
                      compare_slots(name, next.trial) <= 0 || (pending && pending->fingerprint == result.fingerprint)))
-                    continue;
-                if (!valid_folder(name) || (!recovering && !allows_arrival(view, name)) ||
-                    view.rejected_arrivals.contains(name) || name == next.current || name == next.previous ||
-                    (!next.current.empty() && compare(name, next.current) <= 0) ||
-                    std::ranges::any_of(next.failed, [&](const auto& failed)
-                        { return failed.folder == name && failed.fingerprint == result.fingerprint; })) continue;
-                if (recovering)
+                    return false;
+                return valid_folder(name) && !view.rejected_arrivals.contains(name) && name != next.current &&
+                    name != next.previous && (next.current.empty() || compare(name, next.current) > 0) &&
+                    std::ranges::none_of(next.failed, [&](const auto& failed)
+                        { return failed.folder == name && failed.fingerprint == result.fingerprint; });
+            };
+            std::string candidate;
+            if (next.trial.empty() && next.current.empty())
+                for (const auto& entry : view.recovery_history)
                 {
-                    candidate = name;
+                    const auto* quick = lookup(view, entry.folder);
+                    if (!quick) continue;
+                    const auto& result = entry.folder == view.checked_arrival && view.arrival_result
+                        ? view.arrival_result : *quick;
+                    if (entry.fingerprint != result.fingerprint || !eligible(entry.folder, result)) continue;
+                    candidate = entry.folder;
                     break;
                 }
-                if (candidate.empty() || compare_slots(candidate, name) < 0) candidate = name;
-            }
+            if (candidate.empty())
+                for (const auto& [name, result] : view.folders)
+                    if (allows_arrival(view, name) && eligible(name, result) &&
+                        (candidate.empty() || compare_slots(candidate, name) < 0)) candidate = name;
             if (candidate.empty()) return {action::next};
             if (candidate != view.checked_arrival) return {action::scan, {}, candidate};
             if (view.arrival_result)

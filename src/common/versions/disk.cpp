@@ -471,12 +471,16 @@ namespace versions
         return detail::persist_confirmation(root, name, record);
     }
 
-    std::string last_confirmed(const fs::path& root)
+    std::vector<confirmation_entry> confirmation_history(const fs::path& root)
     {
+        struct dated_confirmation
+        {
+            confirmation_entry entry;
+            std::uint64_t time;
+        };
         const auto directory = root / "confirmed";
         if (!plain_path(directory)) return {};
-        std::string newest;
-        std::uint64_t latest{};
+        std::vector<dated_confirmation> records;
         std::error_code error;
         for (fs::directory_iterator it(fs::path(extended(directory)), error), end; !error && it != end; it.increment(error))
         {
@@ -492,13 +496,24 @@ namespace versions
             const auto ledger = load_confirmation(root, name);
             if (!ledger.record) continue;
             const auto time = ledger.record->confirmed_at ? ledger.record->confirmed_at : ledger.last_write;
-            if (time > latest || (time == latest && time && compare(name, newest) > 0))
-            {
-                newest = name;
-                latest = time;
-            }
+            records.push_back({{std::move(name), ledger.record->fingerprint}, time});
         }
-        return error ? std::string{} : newest;
+        if (error) return {};
+        std::ranges::sort(records, [](const auto& a, const auto& b) {
+            if (a.time != b.time) return a.time > b.time;
+            if (const auto order = compare(a.entry.folder, b.entry.folder)) return order > 0;
+            return a.entry.folder > b.entry.folder;
+        });
+        std::vector<confirmation_entry> history;
+        history.reserve(records.size());
+        for (auto& record : records) history.push_back(std::move(record.entry));
+        return history;
+    }
+
+    std::string last_confirmed(const fs::path& root)
+    {
+        auto history = confirmation_history(root);
+        return history.empty() ? std::string{} : std::move(history.front().folder);
     }
 
     loaded_pointer load_pointer(const fs::path& root)

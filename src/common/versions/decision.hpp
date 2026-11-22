@@ -20,8 +20,10 @@ namespace versions
         // Matching durable confirmation, in addition to the selected folder's startup check.
         std::set<std::string, std::less<>> confirmed_folders, published_folders;
         unsigned launches{};
-        std::string last_reason, recovered;
-        // Filled only after the newest quick candidate has been fully checked.
+        std::string last_reason;
+        // Populated when both pointer records are lost, in confirmation order.
+        std::vector<confirmation_entry> recovery_history;
+        // Filled only after the candidate has been fully checked.
         std::string checked_arrival;
         verification arrival_result;
         std::set<std::string, std::less<>> rejected_arrivals;

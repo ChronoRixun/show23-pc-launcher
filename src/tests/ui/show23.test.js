@@ -1008,3 +1008,14 @@ test('Home explains a confirmed fallback when a version record could not be writ
     assert.match(view.id('startup-notice').textContent, /previous confirmed version/);
     assert.match(view.id('startup-notice').textContent, /waiting to save/);
 });
+
+test('Update banner explains a choice queued at the pointer deadline', async () => {
+    const view = open();
+    await view.clock.advance(0);
+    const offer = view.window.LauncherUpdate.barFor({
+        enabled: true, state: 'ready', readyVersion: '0.1.3', requestDeferred: true
+    });
+    assert.match(offer.text, /choice is queued for the next start/);
+    assert.equal(offer.action, view.window.LauncherI18n.t('launcherUpdate.restartNow'));
+    assert.equal(offer.failed, false);
+});

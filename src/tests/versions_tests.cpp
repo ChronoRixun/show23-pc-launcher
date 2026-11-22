@@ -550,10 +550,41 @@ TEST(version_confirmation_and_channel_records_validate_independently)
     CHECK(!read_channel(f.root));
     CHECK(write_channel(f.root, update_channel::stable));
     CHECK(read_channel(f.root) == update_channel::stable);
+    f.write("channel.txt", "stable\n");
+    CHECK(!read_channel(f.root));
     f.write("channel.txt", "stabl");
     CHECK(!read_channel(f.root));
     CHECK(write_channel(f.root, update_channel::beta));
     CHECK(read_channel(f.root) == update_channel::beta);
+    CHECK(read_record(f.root / "channel.txt") == "show23-pc channel 1\nbeta\n");
+}
+
+TEST(version_confirmation_history_keeps_all_retained_records_in_confirmation_order)
+{
+    fixture f;
+    const auto newest = verify(f.complete("0.1.3"), check_mode::full).fingerprint;
+    const auto legacy = verify(f.complete("0.1.4-beta.1"), check_mode::full).fingerprint;
+    const auto oldest = verify(f.complete("0.1.5"), check_mode::full).fingerprint;
+    f.complete("0.1.6");
+    f.complete("0.1.7");
+    constexpr std::uint64_t legacy_time = 132000000000000000;
+    CHECK(detail::persist_confirmation(f.root, "0.1.3", {newest, {}, legacy_time + 100000000}));
+    CHECK(write_confirmation(f.root, "0.1.4-beta.1", legacy));
+    CHECK(detail::persist_confirmation(f.root, "0.1.5", {oldest, {}, legacy_time - 100000000}));
+    CHECK(write_confirmation(f.root, "0.1.8", newest)); // Slot no longer retained.
+    f.write("confirmed/0.1.7.txt", "torn");
+    const auto path = f.root / "confirmed/0.1.4-beta.1.txt";
+    const FILETIME time{static_cast<DWORD>(legacy_time), static_cast<DWORD>(legacy_time >> 32)};
+    {
+        bootstrap::handle record(CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        CHECK(record);
+        CHECK(SetFileTime(record.get(), nullptr, nullptr, &time));
+    }
+
+    const std::vector<confirmation_entry> expected{{"0.1.3", newest}, {"0.1.4-beta.1", legacy}, {"0.1.5", oldest}};
+    CHECK(confirmation_history(f.root) == expected);
+    CHECK(last_confirmed(f.root) == "0.1.3");
 }
 
 TEST(version_startup_hashes_same_size_launcher_and_cef_damage)
@@ -617,15 +648,30 @@ TEST(version_choice_filters_only_new_arrivals_and_preserves_known_recovery)
     auto view = populated();
     view.stable_only = true;
     view.where = step::arrival;
-    view.state.current.clear();
-    view.state.previous.clear();
-    view.recovered = "0.1.4-beta.2";
-    CHECK(decide(view).folder == view.recovered);
-    auto f = fixture{};
-    f.write("channel.txt", "stable\n");
-    CHECK(!read_channel(f.root));
-    CHECK(write_channel(f.root, update_channel::beta));
-    CHECK(read_record(f.root / "channel.txt") == "show23-pc channel 1\nbeta\n");
+    view.state = {};
+    view.folders["0.1.5-beta.1"] = good("newer beta");
+    view.folders["0.1.6-beta.1"] = good("never confirmed beta");
+    view.recovery_history = {
+        {"0.1.3", view.folders.at("0.1.3").fingerprint},
+        {"0.1.4-beta.2", view.folders.at("0.1.4-beta.2").fingerprint},
+        {"0.1.5-beta.1", view.folders.at("0.1.5-beta.1").fingerprint},
+    };
+    CHECK(decide(view).folder == "0.1.3");
+    view.checked_arrival = "0.1.3";
+    view.arrival_result = {view.folders.at("0.1.3").fingerprint, "ui/main.html"};
+    const auto damaged = decide(view);
+    CHECK(damaged.save.has_value());
+    if (!damaged.save) return;
+    view.state = *damaged.save;
+    CHECK(decide(view).folder == "0.1.4-beta.2");
+    view.checked_arrival = "0.1.4-beta.2";
+    view.arrival_result = view.folders.at("0.1.4-beta.2");
+    const auto fallback = decide(view);
+    CHECK(fallback.save && fallback.save->trial == "0.1.4-beta.2");
+    view.arrival_result = good("changed after quick check");
+    view.folders["0.1.5-beta.1"] = good("repacked before quick check");
+    CHECK(decide(view).folder == "0.1.4~2");
+    CHECK(decide(view).next == action::scan);
 }
 
 TEST(version_retryable_reads_keep_the_pointer_and_do_not_seal_a_failure)

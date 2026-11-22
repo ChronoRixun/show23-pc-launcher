@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import ctypes
+import json
 from ctypes import wintypes
 import time
 
@@ -65,8 +66,8 @@ def same_tag_pending(ctx, case, Copy, release_files, feed, expect_current, trans
             "pointer": state, **copy.check()}
 
 
-def request_waits(ctx, Copy, release_files, feed, expect_current, stable, beta):
-    copy = Copy(ctx, "M6-request-wait", stable, ctx.stable)
+def locked_fallback(ctx, case, Copy, release_files, feed, expect_current, stable, beta):
+    copy = Copy(ctx, case, stable, ctx.stable)
     copy.start()
     copy.stage_target(beta)
     with feed(beta, release_files(beta, ctx.next_beta.read_bytes())) as (port, _, _):
@@ -80,6 +81,11 @@ def request_waits(ctx, Copy, release_files, feed, expect_current, stable, beta):
     copy.pointer.write_bytes(stale)
     (copy.versions / "pointer.bak").write_bytes(stale)
     copy.stage_target(stable)
+    return copy, stale
+
+
+def request_waits(ctx, Copy, release_files, feed, expect_current, stable, beta):
+    copy, stale = locked_fallback(ctx, "M6-request-wait", Copy, release_files, feed, expect_current, stable, beta)
     log = copy.data / "data/logs/show23-pc.log"
     request = copy.versions / "request.txt"
     with feed(stable, copy.files) as (port, requests, _), ThreadPoolExecutor(max_workers=1) as worker:
@@ -106,6 +112,36 @@ def request_waits(ctx, Copy, release_files, feed, expect_current, stable, beta):
             **copy.check()}
 
 
+def request_timeout(ctx, Copy, release_files, feed, expect_current, stable, beta):
+    copy, stale = locked_fallback(ctx, "M7-request-timeout", Copy, release_files, feed, expect_current, stable, beta)
+    request = copy.versions / "request.txt"
+    with feed(stable, copy.files) as (port, requests, _), ThreadPoolExecutor(max_workers=1) as worker:
+        with deny_replacement(copy.pointer):
+            started = time.monotonic()
+            switched = worker.submit(copy.start, port=port, action="switch", SHOW23_FIXTURE_STOP_WHEN_DEFERRED="1")
+            try:
+                switched.result(timeout=9)
+            except TimeoutError as error:
+                raise AssertionError("The updater was still waiting after nine seconds with pointer.txt locked.") from error
+            elapsed = time.monotonic() - started
+            assert copy.pointer.read_bytes() == stale
+            queued = json.loads((copy.data / "fixture-deferred-request.json").read_bytes())
+            assert queued["state"] == "ready" and queued["requestDeferred"] is True
+            request_bytes = request.read_text(encoding="ascii")
+            assert f"trial {stable}\nreason switch-to-stable\n" in request_bytes
+            request_id = next(line.split()[1] for line in request_bytes.splitlines() if line.startswith("id "))
+            assert len(request_id) == 16
+
+    copy.start()
+    result = expect_current(copy, stable, beta)
+    assert f"last-request {request_id}\n" in result and not request.exists()
+    copy.start()
+    assert copy.state() == result
+    assert len(requests) == 1 and requests[0].endswith("/latest"), requests
+    return {"waitSeconds": round(elapsed, 3), "whileLocked": queued,
+            "pointerAfterRestart": result, **copy.check()}
+
+
 def run(ctx, Copy, release_files, feed, expect_current, transient, write_files, old, new, stable, beta):
     for case, interrupted in (("M6-publication", False), ("M6-publication-cut", True)):
         ctx.record(case, "The newly published same-tag bytes start ahead of the stale pending trial.",
@@ -114,3 +150,5 @@ def run(ctx, Copy, release_files, feed, expect_current, transient, write_files, 
                        interrupted=interrupted))
     ctx.record("M6-request-wait", "A Stable switch waits for the locked pointer and succeeds after unlock.",
                lambda: request_waits(ctx, Copy, release_files, feed, expect_current, stable, beta))
+    ctx.record("M7-request-timeout", "A persistently locked pointer queues once for the next start within the retry bound.",
+               lambda: request_timeout(ctx, Copy, release_files, feed, expect_current, stable, beta))

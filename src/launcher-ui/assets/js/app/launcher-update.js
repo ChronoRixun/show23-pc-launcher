@@ -163,7 +163,8 @@
                 }
                 case 'ready':
                     return {
-                        text: s.installError || t('launcherUpdate.ready', { version: s.readyVersion || version }),
+                        text: s.installError || t(s.requestDeferred ? 'launcherUpdate.requestDeferred' : 'launcherUpdate.ready',
+                            { version: s.readyVersion || version }),
                         action: t('launcherUpdate.restartNow'),
                         failed: !!s.installError
                     };

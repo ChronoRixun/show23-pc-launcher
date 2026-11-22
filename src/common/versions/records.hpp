@@ -97,6 +97,14 @@ namespace versions
     // A matching legacy stamp still requires a full check. Manual selection can suppress refresh writes.
     verification verify_confirmed(const fs::path& root, std::string_view folder, bool refresh = true);
     bool capture_confirmation(const fs::path& root, std::string_view folder, std::string_view expected_fingerprint);
+
+    struct confirmation_entry
+    {
+        std::string folder, fingerprint;
+        bool operator==(const confirmation_entry&) const = default;
+    };
+    // Sealed confirmations of retained folders, newest confirmation first. Payload files are not checked here.
+    std::vector<confirmation_entry> confirmation_history(const fs::path& root);
     std::string last_confirmed(const fs::path& root);
 
     namespace detail

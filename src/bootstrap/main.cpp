@@ -171,11 +171,7 @@ namespace bootstrap
                 view.published_folders.clear();
                 view.explicit_request = false;
                 pending_fallback.reset();
-                view.recovered = loaded.source == pointer_source::empty ? last_confirmed(root) : std::string{};
-                const auto channel_choice = read_channel(root);
-                const auto last_running = view.state.current.empty() ? view.recovered : view.state.current;
-                view.stable_only = channel_choice ? *channel_choice == update_channel::stable :
-                    !last_running.empty() && folder_version(last_running).find('-') == std::string_view::npos;
+                view.recovery_history.clear();
                 newest.clear();
                 view.last_reason.clear();
                 view.rejected_arrivals.clear();
@@ -195,8 +191,12 @@ namespace bootstrap
                 check(view.state.trial, check_mode::full);
                 view.where = step::validate_names;
                 if (auto selected = apply(decide(view)); selected.next != action::next) return selected;
-                if (!channel_choice && !view.state.current.empty())
-                    view.stable_only = folder_version(view.state.current).find('-') == std::string_view::npos;
+                if (view.state.current.empty()) view.recovery_history = confirmation_history(root);
+                const auto channel_choice = read_channel(root);
+                const auto last_running = !view.state.current.empty() ? view.state.current :
+                    (view.recovery_history.empty() ? std::string{} : view.recovery_history.front().folder);
+                view.stable_only = channel_choice ? *channel_choice == update_channel::stable :
+                    !last_running.empty() && folder_version(last_running).find('-') == std::string_view::npos;
 
                 const auto request_path = root / "request.txt";
                 const auto bytes = read_record(request_path);
@@ -241,7 +241,9 @@ namespace bootstrap
                     {
                         view.last_reason.clear();
                         view.folders[view.checked_arrival] = view.arrival_result;
-                        return apply(decide(view));
+                        auto checked = decide(view);
+                        if (checked.next == action::scan) continue;
+                        return apply(std::move(checked));
                     }
                     log(root, selected.folder + (view.arrival_result.retryable ? ": temporarily unreadable:" : ": damaged:") +
                         view.arrival_result.bad_file);
@@ -406,7 +408,9 @@ namespace bootstrap
                         }
                         log(root, recorded ? "confirmed " + folder : "could not record confirmation for " + folder);
                     }
-                    while (pending_fallback && WaitForSingleObject(app.process.get(), 250) == WAIT_TIMEOUT)
+                    const auto fallback_deadline = GetTickCount64() + 3000;
+                    while (pending_fallback && GetTickCount64() < fallback_deadline &&
+                           WaitForSingleObject(app.process.get(), 250) == WAIT_TIMEOUT)
                     {
                         const decision retry{action::next, *pending_fallback};
                         if (!save_pointer(retry)) continue;
@@ -414,6 +418,7 @@ namespace bootstrap
                         pending_fallback.reset();
                         log(root, "saved the previously blocked fallback record");
                     }
+                    if (pending_fallback) log(root, "will retry the fallback record on the next start");
                     WaitForSingleObject(app.process.get(), INFINITE);
                     if (!GetExitCodeProcess(app.process.get(), &code)) return 1;
                     return code;
@@ -484,9 +489,10 @@ namespace bootstrap
             if (!state.current.empty() || !state.previous.empty()) return 1;
             if (!state.trial.empty())
                 return verify(root / state.trial, check_mode::full) && print_folder(state.trial) ? 0 : 1;
-            const auto recovered = last_confirmed(root);
-            if (!recovered.empty())
-                return verify_confirmed(root, recovered, false) && print_folder(recovered) ? 0 : 1;
+            const auto history = confirmation_history(root);
+            for (const auto& entry : history)
+                if (verify_confirmed(root, entry.folder, false)) return print_folder(entry.folder) ? 0 : 1;
+            if (!history.empty()) return 1;
 
             std::string newest;
             std::error_code error;

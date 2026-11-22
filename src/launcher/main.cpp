@@ -318,6 +318,15 @@ namespace
                 requested = launcher_update::start_download(action == "switch" ? target : std::string{});
             if (phase == "ready")
             {
+                if (setting("SHOW23_FIXTURE_STOP_WHEN_DEFERRED") == "1" && state["requestDeferred"].GetBool())
+                {
+                    rapidjson::StringBuffer buffer;
+                    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+                    state.Accept(writer);
+                    utils::io::write_file(data / "fixture-deferred-request.json", buffer.GetString());
+                    code = 0;
+                    break;
+                }
                 std::string error;
                 if (lease)
                 {

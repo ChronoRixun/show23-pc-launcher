@@ -22,6 +22,7 @@ import update_e2e_review
 import update_e2e_reuse
 import update_e2e_rules
 import update_e2e_publication
+import update_e2e_history
 import update_e2e_window
 
 OLD = "0.1.3-beta.1"
@@ -108,9 +109,9 @@ class Matrix:
     def __init__(self, options):
         self.__dict__.update(vars(options))
         self.root = self.work.resolve()
-        scopes = [(PROBES / milestone).resolve() for milestone in ("m4", "m5", "m6")]
+        scopes = [(PROBES / milestone).resolve() for milestone in ("m4", "m5", "m6", "m7")]
         if not any(scope in self.root.parents for scope in scopes):
-            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4, m5 or m6.")
+            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4, m5, m6 or m7.")
         self.root.mkdir()
         self.results = []
 
@@ -430,6 +431,7 @@ def run(ctx):
     update_e2e_boot.run(ctx)
     update_e2e_review.run(ctx)
     update_e2e_rules.run(ctx, Copy, release_files, STABLE, BETA)
+    update_e2e_history.run(ctx)
     update_e2e_publication.run(ctx, Copy, release_files, feed, expect_current, transient, write_files, OLD, NEW, STABLE, BETA)
     for case, same, competing in (("E16-mismatch", False, False), ("E16-identical", True, False),
                                   ("E16-competing", True, True)):
