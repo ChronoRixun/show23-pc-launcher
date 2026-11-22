@@ -870,6 +870,16 @@
             }
         });
         bind('restart-online', 'click', () => run('relaunch-online'));
+        bind('use-this-copy', 'click', async () => {
+            const button = $('use-this-copy');
+            button.disabled = true;
+            try {
+                const result = await run('use-this-copy');
+                const message = result?.desktop && result.startMenu ? 'updated' :
+                    result?.desktop ? 'desktopOnly' : result?.startMenu ? 'startMenuOnly' : 'failed';
+                window.showToast(t('shortcuts.' + message), message === 'updated' ? 'success' : 'error');
+            } finally { button.disabled = false; }
+        });
         bind('switch-mode', 'click', async () => {
             const answer = await run('switch-portable', { portable: state.location === 'portable' });
             if (!answer?.success) status('settings-status', t('settings.saveError'));

@@ -9,6 +9,7 @@
 #include "show23/card_import.hpp"
 #include "show23/server_paths.hpp"
 #include "show23/player_name.hpp"
+#include "show23/shortcuts.hpp"
 #include "show23/unpacker.hpp"
 #include "updater/launcher_update.hpp"
 #include "updater/part_store.hpp"
@@ -337,6 +338,17 @@ namespace commands
 
         void register_settings(cef::cef_ui& ui)
         {
+            ui.add_command("use-this-copy", [](const auto&, rapidjson::Document& response)
+            {
+                show23::shortcut_result updated;
+                try { updated = show23::update_shortcuts(true); }
+                catch (...) {}
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("desktop", updated.desktop, a);
+                response.AddMember("startMenu", updated.start_menu, a);
+            });
+
             ui.add_command("suggest-player-name", [](const auto&, rapidjson::Document& response)
             {
                 response.CopyFrom(json(show23::windows_player_name(), response.GetAllocator()), response.GetAllocator());

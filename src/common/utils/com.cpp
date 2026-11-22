@@ -222,7 +222,7 @@ namespace utils::com
             return false;
         }
 
-        shell_link->SetPath(target_path.c_str());
+        if (FAILED(shell_link->SetPath(target_path.c_str()))) return false;
         shell_link->SetDescription(string::convert(description).data());
 
         if (!working_directory.empty())

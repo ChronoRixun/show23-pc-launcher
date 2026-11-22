@@ -1,6 +1,7 @@
 #include "std_include.hpp"
 #include "cef/cef_ui.hpp"
 #include "commands/commands.hpp"
+#include "show23/shortcuts.hpp"
 #include "updater/launcher_update.hpp"
 
 #include <utils/flags.hpp>
@@ -9,7 +10,6 @@
 #include <utils/property_keys.hpp>
 #include <utils/io.hpp>
 #include <utils/nt.hpp>
-#include <utils/com.hpp>
 
 #include <crtdbg.h>
 #include <thread>
@@ -141,71 +141,39 @@ namespace
         commands::stop_workers();
     }
 
-    bool same_path(const std::filesystem::path& a, const std::filesystem::path& b)
+    HWND find_running_window()
     {
-        return _wcsicmp(a.lexically_normal().c_str(), b.lexically_normal().c_str()) == 0;
+        HWND result{};
+        EnumWindows([](HWND window, LPARAM context) -> BOOL
+        {
+            // The browser handler puts this property on the launcher window and its
+            // children. Match the root only, regardless of the executable's folder.
+            if (GetPropA(window, "show23_root_window") != window ||
+                GetPropA(window, "show23_closing") || !IsWindowVisible(window)) return TRUE;
+            *reinterpret_cast<HWND*>(context) = window;
+            return FALSE;
+        }, reinterpret_cast<LPARAM>(&result));
+        return result;
     }
 
-    void create_launcher_shortcut(const std::filesystem::path& launcher_path,
-                                  const std::filesystem::path& shortcut_path, const char* created_key)
+    bool activate_running_window()
     {
-        if (utils::properties::load(created_key) == "true")
+        const auto deadline = std::chrono::steady_clock::now() + 800ms;
+        do
         {
-            // User deleted it on purpose — respect that, don't resurrect it.
-            if (!std::filesystem::exists(shortcut_path))
+            if (const auto window = find_running_window())
             {
-                return;
-            }
-
-            // Still points at the current exe? Nothing to do.
-            const auto current_target = utils::com::read_shortcut_target(shortcut_path);
-            if (!current_target.empty() && same_path(current_target, launcher_path))
-            {
-                return;
-            }
-        }
-
-        // First run, or exe moved/renamed — (re)write the same .lnk in place.
-        if (utils::com::create_shortcut(launcher_path, shortcut_path, "Launch show23-pc launcher"))
-        {
-            utils::properties::store(created_key, "true");
-        }
-    }
-
-    void create_shortcuts()
-    {
-        // Opt-out also skips the Start Menu link.
-        if (utils::properties::load(property_keys::AUTO_SHORTCUTS) == "false") return;
-
-        try
-        {
-            const auto launcher_path = utils::nt::library{}.get_path();
-
-            const auto desktop_path = utils::com::get_desktop_path();
-            if (!desktop_path.empty())
-            {
-                create_launcher_shortcut(launcher_path, desktop_path / "show23-pc launcher.lnk",
-                                         property_keys::SHORTCUT_CREATED);
-            }
-
-            // Group launcher shortcuts in the Start menu.
-            const auto programs = utils::com::get_start_menu_programs_path();
-            if (!programs.empty())
-            {
-                const auto sm_dir = programs / L"show23-pc launcher";
-                std::error_code ec;
-                std::filesystem::create_directories(sm_dir, ec);
-                if (!ec)
+                if (IsIconic(window)) ShowWindowAsync(window, SW_RESTORE);
+                else
                 {
-                    create_launcher_shortcut(launcher_path, sm_dir / "show23-pc launcher.lnk",
-                                             property_keys::START_MENU_SHORTCUT_CREATED);
+                    SetForegroundWindow(window);
+                    const auto foreground = GetForegroundWindow();
+                    if (foreground && GetAncestor(foreground, GA_ROOTOWNER) == window) return true;
                 }
             }
-        }
-        catch (...)
-        {
-            printf("Error creating shortcuts\n");
-        }
+            std::this_thread::sleep_for(40ms);
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
     }
 }
 
@@ -230,25 +198,26 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
 
     try
     {
-        set_working_directory();
-
         const utils::nt::library lib{instance};
-        const auto path = utils::properties::get_appdata_path();
-
         if (is_subprocess())
         {
+            set_working_directory();
             run_watchdog();
-            return run_subprocess(lib, path);
+            return run_subprocess(lib, utils::properties::get_appdata_path());
         }
 
-        enable_dpi_awareness();
-
-#if !defined(DEBUG)
         if (!try_become_singleton())
         {
-            throw std::runtime_error{"show23-pc launcher is already running"};
+            if (!activate_running_window())
+                MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
+            return 0;
         }
-#else
+
+        set_working_directory();
+        const auto path = utils::properties::get_appdata_path();
+        enable_dpi_awareness();
+
+#if defined(DEBUG)
         AllocConsole();
         FILE* fp;
         freopen_s(&fp, "CONOUT$", "w", stdout);
@@ -260,9 +229,7 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         switch (launcher_update::apply_pending())
         {
         case launcher_update::result::relaunch:
-#if !defined(DEBUG)
             singleton_mutex().unlock(); // the new launcher takes it
-#endif
             if (!launcher_update::relaunch())
             {
                 MessageBoxW(nullptr, L"show23-pc launcher could not start itself again after an update step. Start it again.",
@@ -282,14 +249,8 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         // Persistent equivalent of -offline, settable from the Settings page.
         if (utils::properties::load(property_keys::OFFLINE_MODE) == "true") utils::flags::add_flag("offline");
 
-        if (!utils::nt::is_wine_environment())
-        {
-            create_shortcuts();
-        }
-        else
-        {
-            printf("[Wine/Proton] Running under Wine - some Windows-specific features are disabled\n");
-        }
+        try { show23::update_shortcuts(false); }
+        catch (...) { printf("Error creating shortcuts\n"); }
 
         show_window(lib, path);
 

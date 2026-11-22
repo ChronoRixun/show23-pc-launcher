@@ -1,6 +1,13 @@
 (function () {
     const translations = {
         "en": {
+            "shortcuts": {
+                "useThisCopy": "Use this copy for shortcuts",
+                "updated": "Both shortcuts now open this copy.",
+                "desktopOnly": "Updated the desktop shortcut. Could not update the Start menu shortcut.",
+                "startMenuOnly": "Updated the Start menu shortcut. Could not update the desktop shortcut.",
+                "failed": "Could not update the desktop or Start menu shortcut."
+            },
             "resolution": {
                 "label": "Resolution",
                 "help": "Higher looks sharper; the game's frame rate is mostly limited by the processor.",
@@ -488,6 +495,13 @@
             }
         },
         "fr": {
+            "shortcuts": {
+                "useThisCopy": "Utiliser cette copie pour les raccourcis",
+                "updated": "Les deux raccourcis ouvrent maintenant cette copie.",
+                "desktopOnly": "Raccourci du Bureau mis à jour. Impossible de mettre à jour celui du menu Démarrer.",
+                "startMenuOnly": "Raccourci du menu Démarrer mis à jour. Impossible de mettre à jour celui du Bureau.",
+                "failed": "Impossible de mettre à jour les raccourcis du Bureau et du menu Démarrer."
+            },
             "resolution": {
                 "label": "Résolution",
                 "help": "Une résolution plus élevée donne une image plus nette. La fréquence d’images du jeu dépend surtout du processeur.",
@@ -969,6 +983,13 @@
             }
         },
         "es": {
+            "shortcuts": {
+                "useThisCopy": "Usar esta copia para los accesos directos",
+                "updated": "Los dos accesos directos abren ahora esta copia.",
+                "desktopOnly": "Se actualizó el acceso directo del escritorio. No se pudo actualizar el del menú Inicio.",
+                "startMenuOnly": "Se actualizó el acceso directo del menú Inicio. No se pudo actualizar el del escritorio.",
+                "failed": "No se pudieron actualizar los accesos directos del escritorio ni del menú Inicio."
+            },
             "resolution": {
                 "label": "Resolución",
                 "help": "Una resolución más alta da una imagen más nítida. La frecuencia de fotogramas del juego depende sobre todo del procesador.",
@@ -1450,6 +1471,13 @@
             }
         },
         "ru": {
+            "shortcuts": {
+                "useThisCopy": "Использовать эту копию для ярлыков",
+                "updated": "Теперь оба ярлыка открывают эту копию.",
+                "desktopOnly": "Ярлык на рабочем столе обновлён. Не удалось обновить ярлык в меню «Пуск».",
+                "startMenuOnly": "Ярлык в меню «Пуск» обновлён. Не удалось обновить ярлык на рабочем столе.",
+                "failed": "Не удалось обновить ярлыки на рабочем столе и в меню «Пуск»."
+            },
             "resolution": {
                 "label": "Разрешение",
                 "help": "При более высоком разрешении изображение чётче. Частота кадров в игре в основном зависит от процессора.",

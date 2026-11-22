@@ -686,7 +686,7 @@ test('Settings groups controls by the player tasks in every language', async () 
         ['settings-game', ['player-name', 'resolution', 'fullscreen']],
         ['settings-updates', ['channel', 'parts', 'check-parts']],
         ['settings-setup', ['settings-unpacker-path', 'location', 'switch-mode']],
-        ['settings-launcher', ['offline', 'language']]
+        ['settings-launcher', ['offline', 'language', 'use-this-copy']]
     ];
     const headings = {
         en: ['Game', 'Updates', 'Setup and files', 'Launcher'],
@@ -800,3 +800,37 @@ if (process.env.SHOW23_SETTINGS_UI_EVIDENCE === '1') {
         }
     });
 }
+
+
+test('Launcher shortcuts action and confirmation are localized in all four languages', async () => {
+    const labels = {
+        en: ['Use this copy for shortcuts', 'Both shortcuts now open this copy.'],
+        fr: ['Utiliser cette copie pour les raccourcis', 'Les deux raccourcis ouvrent maintenant cette copie.'],
+        es: ['Usar esta copia para los accesos directos', 'Los dos accesos directos abren ahora esta copia.'],
+        ru: ['Использовать эту копию для ярлыков', 'Теперь оба ярлыка открывают эту копию.']
+    };
+    for (const [language, [label, confirmation]] of Object.entries(labels)) {
+        const view = open({ 'get-settings': { language }, 'use-this-copy': { desktop: true, startMenu: true } });
+        await view.clock.advance(0);
+        view.id('settings').click();
+        await view.clock.advance(0);
+        const action = view.id('use-this-copy');
+        assert.equal(action.textContent.trim(), label);
+        action.click();
+        await view.clock.advance(0);
+        assert.equal(view.requests.filter(entry => entry.command === 'use-this-copy').length, 1);
+        assert.deepEqual(view.toasts.at(-1), [confirmation, 'success']);
+    }
+});
+
+test('Launcher shortcuts action reports a partial update', async () => {
+    const view = open({
+        'get-settings': { language: 'en' }, 'use-this-copy': { desktop: true, startMenu: false }
+    });
+    await view.clock.advance(0);
+    view.id('settings').click();
+    await view.clock.advance(0);
+    view.id('use-this-copy').click();
+    await view.clock.advance(0);
+    assert.deepEqual(view.toasts.at(-1), ['Updated the desktop shortcut. Could not update the Start menu shortcut.', 'error']);
+});
