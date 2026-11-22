@@ -16,6 +16,9 @@ namespace release_source
 
         std::string api_base()
         {
+#ifdef SHOW23_UPDATE_FIXTURE
+            if (const auto local = utils::http::fixture_origin(); !local.empty()) return local;
+#endif
             return "https://api.github.com";
         }
 
@@ -98,8 +101,22 @@ namespace release_source
         return outcomes;
     }
 
+    bool allowed_download_url(const std::string_view url)
+    {
+        const auto path = "/" + std::string(launcher_repo) + "/releases/download/";
+#ifdef SHOW23_UPDATE_FIXTURE
+        if (const auto local = utils::http::fixture_origin(); !local.empty())
+            return url.starts_with(local + path);
+#endif
+        return url.starts_with("https://github.com" + path);
+    }
+
     std::string file_url(const std::string& repo, const release_channel::release& chosen, const std::string& file)
     {
+#ifdef SHOW23_UPDATE_FIXTURE
+        if (const auto local = utils::http::fixture_origin(); !local.empty())
+            return local + "/" + repo + "/releases/download/" + chosen.tag + "/" + file;
+#endif
         return release_channel::download_url(repo, chosen.tag, file);
     }
 }

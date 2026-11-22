@@ -1,14 +1,8 @@
 @echo off
 setlocal DisableDelayedExpansion
 if "%~1"=="" goto usage
-set "bundle=%~dp0.."
-set "version="
-if exist "%bundle%\manifests\runtime.txt" set /p "version="<"%bundle%\manifests\runtime.txt"
-if not defined version goto missing
-set "runtime=%bundle%\runtime\%version%"
-if not exist "%runtime%\server\python\python.exe" goto missing
-if not exist "%runtime%\emulator\shadPS4.exe" goto missing
-"%runtime%\server\python\python.exe" -B "%runtime%\server\olserver.py" play --install %* --emulator "%runtime%\emulator\shadPS4.exe"
+if not exist "%~dp0..\show23-pc-launcher.exe" goto missing
+"%~dp0..\show23-pc-launcher.exe" --manual-play %*
 exit /b %errorlevel%
 
 :usage

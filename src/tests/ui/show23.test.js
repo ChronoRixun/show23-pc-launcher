@@ -902,3 +902,102 @@ test('versioned launch keeps a deferred start read-only and explains the restart
     assert.equal(view.id('setup-open').inert, true);
     assert.match(view.id('startup-notice').textContent, /Restart the launcher/);
 });
+
+test('Home exposes explicit Repair for a damaged runtime and disables it while in use', async () => {
+    let inUse = true;
+    const view = open({
+        'get-show23': () => ({ setUp: true, ready: false, runtimeRepairable: true, runtimeInUse: inUse, runtimeError: 'server/olserver.py' }),
+        'repair-runtime': true,
+        'get-runtime-repair': { busy: false, success: true }
+    });
+    await view.clock.advance(0);
+    assert.equal(view.id('play').disabled, true);
+    assert.equal(view.id('repair-runtime').hidden, false);
+    assert.equal(view.id('repair-runtime').disabled, true);
+    assert.match(view.id('game-source-notice').textContent, /server\/olserver\.py/);
+    inUse = false;
+    await view.clock.advance(1000);
+    assert.equal(view.id('repair-runtime').disabled, false);
+    view.id('repair-runtime').click();
+    await view.clock.advance(0);
+    assert.equal(view.requests.some(item => item.command === 'repair-runtime'), false);
+    assert.equal(view.messages.length, 1);
+    assert.match(view.messages[0][1], /same runtime version/);
+});
+
+test('Home never offers repair for an unidentifiable runtime', async () => {
+    const view = open({ 'get-show23': { setUp: true, ready: false, runtimeError: 'bad runtime marker' } });
+    await view.clock.advance(0);
+    assert.equal(view.id('play').disabled, true);
+    assert.equal(view.id('repair-runtime').hidden, true);
+    assert.match(view.id('game-source-notice').textContent, /bad runtime marker/);
+});
+
+test('confirmed Repair reports success and restores Play only after verification', async () => {
+    let repaired = false;
+    const view = open({
+        'get-show23': () => repaired ? { setUp: true, ready: true } :
+            { setUp: true, runtimeRepairable: true, runtimeError: 'bad runtime file' },
+        'repair-runtime': () => { repaired = true; return true; },
+        'get-runtime-repair': { busy: false, success: true }
+    });
+    view.window.showMessageBox = async () => 1;
+    await view.clock.advance(0);
+    view.id('repair-runtime').click();
+    await view.clock.advance(0);
+    assert.ok(view.requests.some(item => item.command === 'repair-runtime'));
+    assert.match(view.id('runtime-repair-result').textContent, /Repaired/);
+    assert.equal(view.id('play').disabled, false);
+    assert.equal(view.id('repair-runtime').hidden, true);
+});
+
+test('a ready update disables restart while a runtime session is active', async () => {
+    const ready = { enabled: true, state: 'ready', readyVersion: '0.1.3-beta.2', channelChangeAllowed: false };
+    const view = open({
+        'get-show23': { setUp: true, ready: true, runtimeInUse: true },
+        'get-launcher-update': ready,
+        'check-launcher-update': ready
+    });
+    await view.clock.advance(0);
+    assert.equal(view.id('launcher-update-action').disabled, true);
+    assert.equal(view.id('channel-stable').disabled, true);
+});
+
+test('version retry queues only the failed slot the player confirms', async () => {
+    const status = { enabled: true, canInstall: true, state: 'up-to-date',
+        failedFolder: '0.1.3-beta.2~2', failedVersion: '0.1.3-beta.2' };
+    const view = open({ 'get-settings': { language: 'en', offline: false },
+        'get-launcher-update': status, 'check-launcher-update': status, 'retry-launcher-version': true });
+    view.window.showMessageBox = async () => 1;
+    await view.clock.advance(0);
+    view.id('retry-launcher-version').click();
+    await view.clock.advance(0);
+    const request = view.requests.find(item => item.command === 'retry-launcher-version');
+    assert.equal(request.payload.folder, '0.1.3-beta.2~2');
+});
+
+test('an older unversioned Stable release is a separate extraction link', async () => {
+    const status = { enabled: true, canInstall: true, state: 'up-to-date', channel: 'stable',
+        latest: '0.1.2', aheadOfStable: true, stableNeedsExtraction: true };
+    const view = open({ 'get-settings': { language: 'en', channel: 'stable', offline: false },
+        'get-launcher-update': status, 'check-launcher-update': status });
+    await view.clock.advance(0);
+    assert.equal(view.id('switch-stable').hidden, false);
+    view.id('switch-stable').click();
+    await view.clock.advance(0);
+    assert.ok(view.requests.some(item => item.command === 'open-launcher-release'));
+    assert.equal(view.requests.some(item => item.command === 'request-stable'), false);
+});
+
+test('Home keeps a fresh runtime read-only until Play', async () => {
+    const view = open({ 'get-show23': { setUp: true, runtimeFresh: true },
+        'play-show23': true, 'get-play': { phase: 'idle' } });
+    await view.clock.advance(0);
+    assert.match(view.id('game-source-notice').textContent, /when you press Play/);
+    assert.equal(view.id('play').disabled, false);
+    assert.equal(view.id('repair-runtime').hidden, true);
+    assert.equal(view.requests.some(item => item.command === 'play-show23'), false);
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.ok(view.requests.some(item => item.command === 'play-show23'));
+});

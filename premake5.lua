@@ -35,6 +35,15 @@ newoption {
 }
 
 
+newoption {
+    trigger = "update-fixture",
+    description = "Enable the isolated loopback update fixture."
+}
+
+if _OPTIONS["update-fixture"] then
+    assert(os.getenv("SHOW23_BUILD_UPDATE_FIXTURE") == "1", "Explicit fixture build approval is required.")
+end
+
 local function git_value(command)
     if not (os.isdir(".git") or os.isfile(".git")) then return "" end
     local process = assert(io.popen("git " .. command .. " 2>nul", "r"))
@@ -148,6 +157,7 @@ filter "configurations:Debug"
 filter {}
 
 project "common"
+if _OPTIONS["update-fixture"] then defines {"SHOW23_UPDATE_FIXTURE"} end
 kind "StaticLib"
 language "C++"
 
@@ -162,6 +172,7 @@ resincludedirs {"$(ProjectDir)src"}
 dependencies.imports()
 
 project "show23-pc"
+if _OPTIONS["update-fixture"] then defines {"SHOW23_UPDATE_FIXTURE"} end
 kind "WindowedApp"
 language "C++"
 
@@ -190,6 +201,8 @@ end
 
 filter "files:src/launcher/versioned_start.cpp"
     flags {"NoPCH"}
+filter "files:src/launcher/updater/versioned_update_files.cpp"
+    flags {"NoPCH"}
 filter {}
 
 dependencies.imports()
@@ -198,6 +211,7 @@ removelinks {"cef_sandbox"}
 
 
 project "show23-pc-bootstrap"
+if _OPTIONS["update-fixture"] then defines {"SHOW23_UPDATE_FIXTURE"} end
 kind "WindowedApp"
 language "C++"
 targetname "show23-pc-bootstrap"
@@ -223,7 +237,7 @@ dependson {"show23-pc-bootstrap"}
 kind "ConsoleApp"
 language "C++"
 files {"./src/tests/**.hpp", "./src/tests/**.cpp", "./src/bootstrap/process.cpp", "./src/launcher/versioned_start.cpp",
-       "./src/launcher/updater/swap_retry.cpp", "./src/launcher/updater/release_channel.cpp",
+       "./src/launcher/updater/versioned_update_files.cpp", "./src/launcher/updater/release_channel.cpp",
        "./src/launcher/updater/release_resolver.cpp", "./src/launcher/updater/part_manifest.cpp",
        "./src/launcher/support/redact.cpp", "./src/launcher/support/report_rules.cpp",
        "./src/launcher/show23/sfo.cpp", "./src/launcher/show23/package_header.cpp",
@@ -238,6 +252,7 @@ defines {"RAPIDJSON_HAS_STDSTRING", "NOMINMAX"}
 links {"common"}
 libtomcrypt.import()
 libtommath.import()
+miniz.import()
 
 if _ACTION == "vs2022" then
     group "Dependencies"

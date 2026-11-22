@@ -37,7 +37,7 @@ namespace checked_download
                 progress(written, size);
             }
             return static_cast<bool>(stream);
-        }, {}, 900, 0);
+        }, cancelled, 900, 0);
         stream.close();
 
         if (cancelled && cancelled())

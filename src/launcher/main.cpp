@@ -4,6 +4,14 @@
 #include "show23/shortcuts.hpp"
 #include "updater/launcher_update.hpp"
 #include "versioned_start.hpp"
+#include "show23/child_process.hpp"
+#include "show23/server_paths.hpp"
+#include "updater/part_store.hpp"
+#include <versions/records.hpp>
+#include <utils/finally.hpp>
+#ifdef SHOW23_UPDATE_FIXTURE
+#include <utils/http.hpp>
+#endif
 #include <versions/instance.hpp>
 
 #include <utils/flags.hpp>
@@ -14,6 +22,7 @@
 #include <utils/nt.hpp>
 
 #include <crtdbg.h>
+#include <shellapi.h>
 #include <thread>
 
 namespace
@@ -104,9 +113,7 @@ namespace
 
     bool try_become_singleton()
     {
-        // Started by the self-update's restart: the previous process lets go of the lock only as it
-        // exits, which can take longer than a few seconds on a busy PC.
-        return singleton_mutex().try_lock(launcher_update::is_restart() ? 30s : 3s);
+        return singleton_mutex().try_lock(3s);
     }
 
     bool is_subprocess()
@@ -149,9 +156,97 @@ namespace
 
         cef::cef_ui::work();
         commands::stop_workers();
+        launcher_update::stop();
     }
 
+    int manual_play()
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        const auto error = [](std::string_view message)
+        {
+            const auto text = std::string(message) + "\r\n";
+            DWORD written{};
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+            return 1;
+        };
+        const auto& layout = versioned_start::layout();
+        if (!layout) return error("Extract the entire launcher ZIP before using manual Play.");
+        int count{};
+        const auto args = CommandLineToArgvW(GetCommandLineW(), &count);
+        if (!args) return 1;
+        const auto release = utils::finally([&] { LocalFree(args); });
+        if (count < 3 || !*args[2]) return error("Choose an install folder for manual Play.");
+        const auto install = std::filesystem::absolute(args[2]).lexically_normal();
+        const parts::runtime_lease lease(install, false);
+        if (!lease) return error("The game runtime is in use or its lock cannot be opened.");
 
+        const auto runtime = parts::read_runtime(layout.release);
+        std::string details;
+        if (!parts::verify_runtime(runtime, launcher_update::running_version(), details)) return error(details);
+        const auto server = show23::server_paths(parts::component_folder(runtime, parts::id::server));
+        const auto emulator = parts::component_folder(runtime, parts::id::emulator) / "shadPS4.exe";
+        std::vector<std::wstring> command{L"-B", server.script.native(), L"play", L"--install", install.native()};
+        for (int i = 3; i < count; ++i) command.emplace_back(args[i]);
+        command.insert(command.end(), {L"--emulator", emulator.native()});
+
+        const auto duplicate = [](DWORD stream)
+        {
+            HANDLE result{};
+            DuplicateHandle(GetCurrentProcess(), GetStdHandle(stream), GetCurrentProcess(), &result,
+                0, TRUE, DUPLICATE_SAME_ACCESS);
+            return show23::input_paths::handle(result);
+        };
+        const auto input = duplicate(STD_INPUT_HANDLE), output = duplicate(STD_OUTPUT_HANDLE);
+        show23::child_process child;
+        if (!input || !output || !child.start(server.python, server.script.parent_path(), command, input.get(), output.get(), false))
+            return error("Could not start manual Play.");
+        while (child.running()) Sleep(100);
+        const auto code = child.exit_code().value_or(1);
+        // Stop and wait for any remaining descendants before the lease is released.
+        return child.stop() ? static_cast<int>(code) : 1;
+    }
+
+#ifdef SHOW23_UPDATE_FIXTURE
+    int run_update_fixture(const std::filesystem::path& data)
+    {
+        const auto& layout = versioned_start::layout();
+        const auto target = versions::read_record(data / "fixture-mode", 64);
+        if (!layout || !versions::valid_version(target) || utils::http::fixture_origin().empty() ||
+            !versioned_start::confirm()) return 2;
+        while (versioned_start::status() == versioned_start::gate::waiting) Sleep(25);
+        if (!versioned_start::unlocked()) return 3;
+        launcher_update::cleanup();
+
+        const auto current = launcher_update::running_version();
+        utils::io::write_file(data / ("fixture-confirmed-" + current + ".txt"), layout.folder);
+        if (current == target) return 0;
+        launcher_update::check();
+        bool requested{};
+        auto code = 4;
+        for (unsigned i = 0; i < 800; ++i)
+        {
+            rapidjson::Document state;
+            launcher_update::write_status(state, state.GetAllocator());
+            const std::string_view phase(state["state"].GetString());
+            if (phase == "available" && !requested) requested = launcher_update::start_download();
+            if (phase == "ready")
+            {
+                std::string error;
+                if (launcher_update::restart(error)) code = 75;
+                break;
+            }
+            if (phase == "failed" || phase == "check-failed")
+            {
+                const auto& detail = state["error"];
+                utils::io::write_file(data / "fixture-error.txt", detail.GetString());
+                break;
+            }
+            Sleep(50);
+        }
+        launcher_update::stop();
+        return code;
+    }
+#endif
 }
 
 int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
@@ -181,6 +276,7 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         const auto versioned = static_cast<bool>(versioned_start::layout());
         if (!versioned && _wcsicmp(executable.filename().c_str(), L"show23-pc-launcher.exe") == 0)
             throw std::runtime_error("Extract the entire release ZIP, then start show23-pc.exe from its top folder.");
+        if (utils::flags::has_flag("-manual-play")) return manual_play();
         if (is_subprocess())
         {
             set_working_directory();
@@ -214,32 +310,14 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         printf("Debug console enabled\n");
 #endif
 
-        // A downloaded launcher update (portable installs) goes in now, before CEF loads its files.
-        if (!versioned) switch (launcher_update::apply_pending())
-        {
-        case launcher_update::result::relaunch:
-            singleton_mutex().unlock(); // the new launcher takes it
-            if (!launcher_update::relaunch())
-            {
-                MessageBoxW(nullptr, L"show23-pc launcher could not start itself again after an update step. Start it again.",
-                            L"show23-pc launcher", MB_ICONERROR | MB_OK);
-                return 1;
-            }
-            return 0;
-        case launcher_update::result::stop:
-            return 1;
-        case launcher_update::result::none:
-            break;
-        }
-        if (!versioned)
-        {
-            launcher_update::cleanup();
-            remove_previous_data_root();
-        }
+        if (!versioned) remove_previous_data_root();
 
         // Persistent equivalent of -offline, settable from the Settings page.
         if (utils::properties::load(property_keys::OFFLINE_MODE) == "true") utils::flags::add_flag("offline");
 
+#ifdef SHOW23_UPDATE_FIXTURE
+        if (utils::flags::has_flag("-update-fixture")) return run_update_fixture(path);
+#endif
         try { if (versioned_start::unlocked()) show23::update_shortcuts(false); }
         catch (...) { printf("Error creating shortcuts\n"); }
 

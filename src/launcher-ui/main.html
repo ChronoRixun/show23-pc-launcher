@@ -103,6 +103,8 @@
                         <p class="status-line" id="game-status" role="status" hidden></p>
                         <p class="status-line game-source-notice" id="startup-notice" role="status" hidden></p>
                         <p class="status-line game-source-notice" id="game-source-notice" role="status" hidden></p>
+                        <button type="button" class="btn btn-secondary" id="repair-runtime" data-i18n="runtimeRepair.button" hidden>Repair runtime</button>
+                        <p class="status-line" id="runtime-repair-result" role="status" hidden></p>
                         <section id="game-verification" class="panel setup-checklist" aria-labelledby="game-verification-title" hidden>
                             <h2 class="section-h" id="game-verification-title" data-i18n="inPlace.verifyHeading">Game folder verification</h2>
                             <ul id="game-verify-findings"></ul>
@@ -303,6 +305,7 @@
                             <div class="actions settings-actions">
                                 <button type="button" class="btn btn-secondary" id="check-parts"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="settings.check">Check for updates</span></button>
                                 <button type="button" class="btn btn-ghost" id="switch-stable" hidden><span data-i18n="settings.goStable">Switch back to Stable</span></button>
+                                <button type="button" class="btn btn-ghost" id="retry-launcher-version" hidden></button>
                                 <time class="small faint checked" id="parts-checked" hidden></time>
                             </div>
                             <p class="status-line" id="update-status" role="status" hidden></p>

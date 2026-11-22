@@ -36,5 +36,6 @@ namespace release_source
     std::array<release_channel::outcome, 2> resolve_shared_parts(release_channel::channel channel);
 
     // Where a file of `chosen` is: by its tag (never releases/latest).
+    bool allowed_download_url(std::string_view url);
     std::string file_url(const std::string& repo, const release_channel::release& chosen, const std::string& file);
 }

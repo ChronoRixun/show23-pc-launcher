@@ -1,6 +1,21 @@
 (function () {
     const translations = {
         "en": {
+            "runtimeRepair": {
+                "button": "Repair runtime",
+                "confirm": "Install a verified copy of the same runtime version? Game files, saves and settings stay in place.",
+                "working": "Preparing a verified runtime copy…",
+                "repaired": "Repaired the runtime.",
+                "inUse": "The runtime is in use. Stop Play or close the manual session.",
+                "failed": "Repair failed. {{detail}}",
+                "problem": "The launcher left the runtime unchanged. {{detail}}",
+                "fresh": "The bundled runtime will be installed when you press Play."
+            },
+            "versionedUpdate": {
+                "retry": "Retry version {{version}}",
+                "confirmRetry": "Try version {{version}} again on the next restart?",
+                "stableExtraction": "Stable {{version}} requires a separate ZIP extraction. Select your existing game install after extracting it."
+            },
             "startup": {
                 "rebuilt": "The launcher rebuilt its version record.",
                 "invalid-request": "The launcher ignored an invalid version request.",
@@ -505,6 +520,21 @@
             }
         },
         "fr": {
+            "runtimeRepair": {
+                "button": "Réparer les composants",
+                "confirm": "Installer une copie vérifiée de la même version ? Les fichiers du jeu, les sauvegardes et les paramètres restent en place.",
+                "working": "Préparation d’une copie vérifiée…",
+                "repaired": "Les composants ont été réparés.",
+                "inUse": "Les composants sont utilisés. Arrêtez le jeu ou fermez la session manuelle.",
+                "failed": "La réparation a échoué. {{detail}}",
+                "problem": "Le lanceur a laissé les composants en place. {{detail}}",
+                "fresh": "Les composants inclus seront installés en lançant le jeu."
+            },
+            "versionedUpdate": {
+                "retry": "Réessayer la version {{version}}",
+                "confirmRetry": "Réessayer la version {{version}} au prochain redémarrage ?",
+                "stableExtraction": "Stable {{version}} nécessite une extraction séparée du ZIP. Sélectionnez ensuite votre installation existante."
+            },
             "startup": {
                 "rebuilt": "Le lanceur a reconstruit son registre des versions.",
                 "invalid-request": "Le lanceur a ignoré une demande de version non valide.",
@@ -1003,6 +1033,21 @@
             }
         },
         "es": {
+            "runtimeRepair": {
+                "button": "Reparar componentes",
+                "confirm": "¿Instalar una copia verificada de la misma versión? Los archivos del juego, las partidas y los ajustes se conservan.",
+                "working": "Preparando una copia verificada…",
+                "repaired": "Se repararon los componentes.",
+                "inUse": "Los componentes están en uso. Detén el juego o cierra la sesión manual.",
+                "failed": "No se pudo reparar. {{detail}}",
+                "problem": "El lanzador dejó los componentes intactos. {{detail}}",
+                "fresh": "Los componentes incluidos se instalarán al jugar."
+            },
+            "versionedUpdate": {
+                "retry": "Reintentar la versión {{version}}",
+                "confirmRetry": "¿Reintentar la versión {{version}} en el próximo reinicio?",
+                "stableExtraction": "Stable {{version}} requiere extraer un ZIP aparte. Después, selecciona tu instalación existente."
+            },
             "startup": {
                 "rebuilt": "El lanzador reconstruyó su registro de versiones.",
                 "invalid-request": "El lanzador ignoró una solicitud de versión no válida.",
@@ -1501,6 +1546,21 @@
             }
         },
         "ru": {
+            "runtimeRepair": {
+                "button": "Восстановить компоненты",
+                "confirm": "Установить проверенную копию той же версии? Файлы игры, сохранения и настройки останутся на месте.",
+                "working": "Подготовка проверенной копии…",
+                "repaired": "Компоненты восстановлены.",
+                "inUse": "Компоненты используются. Остановите игру или закройте ручной сеанс.",
+                "failed": "Не удалось восстановить компоненты. {{detail}}",
+                "problem": "Компоненты оставлены без изменений. {{detail}}",
+                "fresh": "Встроенные компоненты будут установлены при запуске игры."
+            },
+            "versionedUpdate": {
+                "retry": "Повторить запуск версии {{version}}",
+                "confirmRetry": "Попробовать версию {{version}} при следующем перезапуске?",
+                "stableExtraction": "Для стабильной версии {{version}} распакуйте отдельный ZIP и выберите существующую установку игры."
+            },
             "startup": {
                 "rebuilt": "Программа запуска восстановила запись о версиях.",
                 "invalid-request": "Программа запуска проигнорировала недопустимый запрос версии.",

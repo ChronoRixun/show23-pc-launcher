@@ -9,6 +9,10 @@
 
 namespace utils::http
 {
+#ifdef SHOW23_UPDATE_FIXTURE
+    std::string fixture_origin();
+#endif
+
     struct result
     {
         CURLcode code{};

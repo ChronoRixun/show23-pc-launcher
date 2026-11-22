@@ -4,16 +4,34 @@
 #include <mutex>
 #include <thread>
 #include <string_view>
+#include <charconv>
+#include <cstdlib>
 #include "finally.hpp"
 
 #pragma comment(lib, "ws2_32.lib")
 
 namespace utils::http
 {
+#ifdef SHOW23_UPDATE_FIXTURE
+    std::string fixture_origin()
+    {
+        char raw[16]{};
+        std::size_t length{};
+        if (getenv_s(&length, raw, "SHOW23_FIXTURE_PORT") || length < 2) return {};
+        const std::string_view input(raw, length - 1);
+        unsigned int port = 0;
+        const auto [end, error] = std::from_chars(input.data(), input.data() + input.size(), port);
+        if (end != input.data() + input.size() || error != std::errc{} || port == 0 || port > 65535) return {};
+        return "http://127.0.0.1:" + std::to_string(port);
+    }
+#endif
     namespace
     {
         bool release_host(const std::string_view url)
         {
+#ifdef SHOW23_UPDATE_FIXTURE
+            if (const auto loopback = fixture_origin(); !loopback.empty()) return url.starts_with(loopback + "/");
+#endif
             return url.starts_with("https://api.github.com/") ||
                    url.starts_with("https://github.com/") ||
                    url.starts_with("https://release-assets.githubusercontent.com/") ||
@@ -37,8 +55,20 @@ namespace utils::http
             return release_host(target) || (target.starts_with('/') && !target.starts_with("//")) ? length : 0;
         }
 
-        void configure_redirects(CURL* curl)
+        void configure_redirects(CURL* curl, const std::string& url)
         {
+#ifdef SHOW23_UPDATE_FIXTURE
+            const auto loopback = fixture_origin();
+            if (!loopback.empty() && url.starts_with(loopback + "/"))
+            {
+                curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http");
+                curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+                curl_easy_setopt(curl, CURLOPT_PROXY, "");
+                return;
+            }
+#else
+            (void)url;
+#endif
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
             curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
             curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
@@ -237,7 +267,7 @@ namespace utils::http
 
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
         curl_easy_setopt(curl, CURLOPT_URL, url.data());
-        configure_redirects(curl);
+        configure_redirects(curl, url);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout);
 
         // Connection timeout - fail if can't connect within 30 seconds
@@ -344,7 +374,7 @@ namespace utils::http
         }
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
         curl_easy_setopt(curl, CURLOPT_URL, url.data());
-        configure_redirects(curl);
+        configure_redirects(curl, url);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout);
 
         // Connection timeout - fail if can't connect within 30 seconds

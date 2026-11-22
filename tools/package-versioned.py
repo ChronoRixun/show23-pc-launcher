@@ -163,11 +163,34 @@ def save_json(path, data):
     path.write_bytes((json.dumps(data, indent=2) + "\n").encode())
 
 
-def copy_tree(source, target):
+SCRIPT_ENDINGS = {".cmd": b"\r\n", ".ps1": b"\r\n", ".sh": b"\n"}
+
+
+def copy_tree(source, target, normalize_scripts=False):
     for name, file in tree(source).items():
         dest = target / PurePosixPath(name)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(file, dest)
+        eol = SCRIPT_ENDINGS.get(file.suffix.lower()) if normalize_scripts else None
+        if eol:
+            lines = file.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            dest.write_bytes(lines.replace(b"\n", eol))
+        else:
+            shutil.copyfile(file, dest)
+
+
+def check_script_endings(payload):
+    for name, file in tree(payload).items():
+        eol = SCRIPT_ENDINGS.get(file.suffix.lower())
+        if not eol:
+            continue
+        data = file.read_bytes()
+        if eol == b"\r\n":
+            data = data.replace(b"\r\n", b"")
+            wrong = b"\r" in data or b"\n" in data
+        else:
+            wrong = b"\r" in data
+        if wrong:
+            raise ValueError(f"Wrong script line ending in package: {name}")
 
 
 @contextmanager
@@ -220,11 +243,12 @@ def package(tag, floor, frozen, receipt, out):
         player = readme.replace("@VERSION@", tag).replace("@EMULATOR_SOURCE@", source)
         for folder in (payload, release):
             (folder / "README.txt").write_bytes(player.encode())
-        copy_tree(REPO / "tools/manual-forwarders", payload / "manual")
-        copy_tree(REPO / "tools/manual", release / "manual")
+        copy_tree(REPO / "tools/manual-forwarders", payload / "manual", normalize_scripts=True)
+        copy_tree(REPO / "tools/manual", release / "manual", normalize_scripts=True)
         for folder in (payload, release):
             shutil.copyfile(REPO / "tools/manual/README.txt", folder / "manual/README.txt")
         save_json(release / "manifests/launcher.json", part_manifest(tag, channel, floor, launcher, EXE))
+        check_script_endings(payload)
         inventory(release, tag, channel)
         sums = [f"{digest(file)}  {rel}\n" for rel, file in tree(payload).items()]
         (payload / "SHA256SUMS.txt").write_bytes("".join(sums).encode())

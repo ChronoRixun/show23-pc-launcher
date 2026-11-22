@@ -12,7 +12,7 @@
         play: {}, followingPlay: false, startingPlay: false, followingRuntime: false, confirmingClose: false,
         sourceKind: 'folder', setupBusy: false, setupDetails: '', location: 'installed',
         cards: {}, startingCards: false, followingCards: false,
-        startup: {},
+        startup: {}, repairing: false, watchingRepair: false,
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
 
@@ -71,6 +71,7 @@
     function paintHome() {
         const game = state.game;
         const ready = !!game.ready;
+        const canPlay = ready || !!game.runtimeFresh;
         const setUp = ready || !!game.setUp;
         const missing = !!game.gameMissing;
         const phase = state.play.phase || 'idle';
@@ -81,17 +82,26 @@
         $('home-hero').classList.toggle('is-unset', !setUp);
         const sourceMessage = missing ? t(game.sourcePath ? 'inPlace.missingPath' : 'inPlace.invalidRecord', { path: game.sourcePath }) :
             game.checkingRuntime ? t('play.runtimeChecking') :
+            game.runtimeFresh ? t('runtimeRepair.fresh') :
+            game.runtimeError ? t('runtimeRepair.problem', { detail: game.runtimeError }) :
             setUp && !ready ? t('inPlace.runtimeMissing') : game.updated ? t('play.baseOnly') : '';
         status('game-source-notice', sourceMessage);
-        $('play').disabled = !ready || state.startup.waiting || state.startup.deferred || active || state.startingPlay || state.cards.busy || state.startingCards;
+        const locked = state.startup.waiting || state.startup.deferred;
+        const repair = $('repair-runtime');
+        repair.hidden = !game.runtimeRepairable || locked;
+        repair.disabled = active || game.runtimeInUse || state.repairing || state.cards.busy || state.setupBusy || locked;
+        const updateAction = $('launcher-update-action');
+        if (window.LauncherUpdate.status?.state === 'ready') updateAction.disabled = restartBlocked();
+        $('play').disabled = !canPlay || locked || active || state.startingPlay || state.cards.busy ||
+            state.startingCards || game.runtimeInUse || state.repairing;
         $('play').hidden = active;
         $('stop-play').hidden = !active;
         $('stop-play').disabled = phase === 'stopping';
         $('verify').disabled = active || !!game.checkingRuntime || !!state.cards.busy;
         $('remove-game-copy').hidden = !game.installedCopy || active || !!state.cards.busy;
-        $('play').classList.toggle('btn-primary', ready);
-        $('play').classList.toggle('btn-secondary', !ready);
-        if (ready && !active) $('play').setAttribute('data-autofocus', '');
+        $('play').classList.toggle('btn-primary', canPlay);
+        $('play').classList.toggle('btn-secondary', !canPlay);
+        if (canPlay && !active) $('play').setAttribute('data-autofocus', '');
         else $('play').removeAttribute('data-autofocus');
         $('setup-open').hidden = active || !!state.cards.busy || !!game.checkingRuntime || (ready && !game.installedCopy);
         const setupLabel = setUp || missing ? 'inPlace.setUpAgain' : 'game.setup';
@@ -128,6 +138,59 @@
         $('scorebug-source').textContent = game.updated ? t('game.baseAndUpdate') : t('game.baseOnly');
     }
 
+    function restartBlocked() {
+        return !!(state.game.runtimeInUse || state.startingPlay || (state.play.phase && state.play.phase !== 'idle') ||
+            state.cards.busy || state.setupBusy || state.repairing || state.followingRuntime);
+    }
+
+    function watchRepairAvailability() {
+        if (state.watchingRepair || !state.game.runtimeRepairable) return;
+        state.watchingRepair = true;
+        void (async () => {
+            try {
+                while (state.game.runtimeRepairable) {
+                    await sleep(1000);
+                    if (state.repairing || state.setupBusy) continue;
+                    const latest = await run('get-show23');
+                    if (!latest) break;
+                    state.game = latest;
+                    paintHome();
+                }
+            } finally {
+                state.watchingRepair = false;
+            }
+        })().catch(console.error);
+    }
+
+    async function repairRuntime() {
+        if ($('repair-runtime').disabled || $('repair-runtime').hidden) return;
+        const confirm = await window.showMessageBox(t('runtimeRepair.button'), t('runtimeRepair.confirm'),
+            [{ label: t('common.cancel'), cancel: true }, t('runtimeRepair.button')]);
+        if (confirm !== 1) return;
+        state.repairing = true;
+        paintHome();
+        status('runtime-repair-result', t('runtimeRepair.working'));
+        try {
+            if (!await run('repair-runtime')) {
+                status('runtime-repair-result', t('runtimeRepair.inUse'));
+                return;
+            }
+            let result;
+            do {
+                result = await run('get-runtime-repair');
+                if (!result?.busy) break;
+                await sleep(250);
+            } while (true);
+            status('runtime-repair-result', result?.success ? t('runtimeRepair.repaired') :
+                result?.error === 'in-use' ? t('runtimeRepair.inUse') :
+                    t('runtimeRepair.failed', { detail: result?.error || '' }));
+        } finally {
+            state.repairing = false;
+            await gameState();
+            await refreshParts();
+        }
+    }
+
     async function gameState() {
         state.game = await run('get-show23') || {};
         state.mods = null;
@@ -141,8 +204,12 @@
                     paintHome();
                 } while (state.game.checkingRuntime);
                 if (state.game.ready) await refreshParts();
-            } finally { state.followingRuntime = false; }
+            } finally {
+                state.followingRuntime = false;
+                paintHome();
+            }
         }
+        watchRepairAvailability();
         await refreshCards();
         if (state.game.ready) {
             const folder = state.game.folder;
@@ -658,7 +725,12 @@
 
     async function stable() {
         const saved = window.LauncherUpdate.status;
-        if (!saved?.aheadOfStable || !saved.canInstall || saved.channel !== 'stable') return;
+        if (!saved?.aheadOfStable || saved.channel !== 'stable') return;
+        if (saved.stableNeedsExtraction) {
+            window.LauncherUpdate.openPage();
+            return;
+        }
+        if (!saved.canInstall) return;
         const choice = await window.showMessageBox(
             t('settings.goStable'), t('settings.confirmDowngrade', { current: saved.current, target: saved.latest }),
             [{ label: t('settings.keepBeta'), cancel: true }, t('settings.goStable')]
@@ -822,7 +894,8 @@
     function wireSettings() {
         for (const channel of ['stable', 'beta']) {
             bind('channel-' + channel, 'click', async () => {
-                if (state.savingChannel || channel === state.settings.channel) return;
+                if (state.savingChannel || channel === state.settings.channel ||
+                    window.LauncherUpdate.status?.channelChangeAllowed === false) return;
                 state.savingChannel = true;
                 try {
                     if (await save('channel', channel)) {
@@ -895,7 +968,8 @@
 
     function renderPlayResult() {
         const current = state.play;
-        const message = current.result ? t('play.' + current.result, { code: current.code, port: current.code }) : '';
+        const message = current.result === 'runtimeInUse' ? t('runtimeRepair.inUse') :
+            current.result ? t('play.' + current.result, { code: current.code, port: current.code }) : '';
         status('play-result-text', message);
         status('play-result-log', current.log);
         $('play-result').hidden = !message;
@@ -987,6 +1061,8 @@
                 paintHome();
             }
         });
+        bind('repair-runtime', 'click', repairRuntime);
+        bind('retry-launcher-version', 'click', () => window.LauncherUpdate.retry());
         bind('stop-play', 'click', async () => {
             if (await run('stop-play')) $('stop-play').disabled = true;
             await followPlay();
@@ -1026,6 +1102,7 @@
     async function init() {
         wireControls();
         window.paintLauncherSummary = paintUpdateSummary;
+        window.isLauncherRestartBlocked = restartBlocked;
         try {
             state.settings = await run('get-settings') || {};
             state.location = state.settings.portable ? 'portable' : 'installed';

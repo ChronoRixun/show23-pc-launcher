@@ -69,7 +69,7 @@ Back up the whole `data\profiles` folder to keep your progress. The launcher's o
 - The Captain card feature is unverified.
 - About 211 special cards are left out of the import because they could not be matched to a roster player.
 - Choice packs are not supported.
-- The launcher's self-update has not been tried against a real release yet. If it fails, download the new zip by hand.
+- To move from version 0.1.2 or earlier, extract a new full ZIP and choose your existing game install. For versioned releases, the launcher can download a new version and test its startup before making it current.
 - Play uses game version 1.00. The launcher and its bundled emulator target Windows.
 - You need your own legally obtained copy of the game. Nothing here contains game files or card art.
 
@@ -110,7 +110,7 @@ Both packager entry points produce one portable ZIP, its release manifest and SH
 
 ### Update channels
 
-Stable is the default and selects final releases. Beta includes pre-releases. Settings → Updates shows the installed version for the launcher, emulator, server and profile. A pre-release is marked Beta. The launcher asks before switching a portable Beta back to an older Stable release. Keep the beta leaves it installed. Tagged Release builds in installed mode can open the release page for a manual update. Parts without a separate release are marked **Included with the launcher** when bundled. The Installed column shows the version active in the game install. A full ZIP includes the frozen 0.1.2 game runtime. On a versioned install, the bootstrap runs the selected launcher version from its own folder and keeps user settings in the shared data folder. Release assets and compatibility rules are documented in [Release manifests](docs/release-manifest.md).
+Stable is the default and selects final releases. Beta includes pre-releases. Settings → Updates shows the installed version for the launcher, emulator, server and profile. A pre-release is marked Beta. The launcher asks before switching a portable Beta back to an older Stable release. Keep the beta leaves it installed. Tagged Release builds in installed mode can open the release page for a manual update. Parts without a separate release are marked **Included with the launcher** when bundled. The Installed column shows the version active in the game install. The game runtime is frozen at the bundle supplied in 0.1.2. Setup or Play can install it to a fresh game install. If your active runtime fails verification and the bundle supplies the same versions, Home offers **Repair runtime** while Play is stopped. Repair keeps your game data, saves and settings in place. On a versioned install, the bootstrap runs the selected launcher version from its own folder and keeps user settings in the shared data folder. Release assets and compatibility rules are documented in [Release manifests](docs/release-manifest.md).
 
 ## Privacy
 
@@ -123,7 +123,7 @@ The launcher does not send game paths, game files, saves, content packs or diagn
 | `https://api.github.com/repos/ChronoRixun/show23-pc/releases?per_page=30` | When the player chooses Check for updates. The server and profile share the listing |
 | `https://github.com/ChronoRixun/show23-pc-launcher/releases/download/<tag>/<asset>` | After the player approves an update. Assets are `launcher.json`, `SHA256SUMS.txt` and `show23-pc-<version>-win64-portable.zip` |
 | `https://release-assets.githubusercontent.com/…` and `https://objects.githubusercontent.com/…` | When GitHub redirects a release asset download |
-| `https://github.com/ChronoRixun/show23-pc-launcher/releases/latest` | Opens in the default browser when requested from the updater |
+| `https://github.com/ChronoRixun/show23-pc-launcher/releases/tag/v<version>` | Opens the offered version's release page in the default browser when requested from the updater |
 | `https://mlb23.theshow.com/apis/items.json?type=mlb_card&page=<n>` and the picture addresses that list names | Only when the player chooses Import special cards. The bundled server makes these requests, at least 750 ms apart, with a generic user agent and nothing about the player |
 
 The embedded interface uses `http://show23-pc.invalid/` internally. CEF serves that origin from local files and native commands. The default browser and Windows handle their own networking, including certificate validation. Play starts the local server on 127.0.0.1 and the game talks only to it. Use `-offline` at startup or enable **Offline mode** in Settings and restart to disable the launcher's release contacts and the card import.

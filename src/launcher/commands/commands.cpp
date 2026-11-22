@@ -75,7 +75,9 @@ namespace commands
 
         bool runtime_worker_busy{};
         std::optional<show23::fs::path> runtime_target;
-        bool runtime_verified{};
+        parts::runtime_check runtime_status;
+        bool repair_busy{}, repair_success{};
+        std::string repair_error;
         std::jthread runtime_worker;
 
         std::atomic_bool importing_cards{};
@@ -92,7 +94,7 @@ namespace commands
             if (play_active()) return "playing";
             if (setup_busy || verify.busy || runtime_worker_busy) return "busy";
             if (!install || show23::inspect_game(*install).state != show23::record_state::ready) return "setup";
-            if (runtime_target != install || !runtime_verified) return "runtime";
+            if (runtime_target != install || !runtime_status.ready) return "runtime";
             return nullptr;
         }
 
@@ -190,31 +192,24 @@ namespace commands
         bool prepare_runtime(const std::filesystem::path& install)
         {
             if (!versioned_start::unlocked()) return false;
-            const auto version = launcher_update::running_version();
-            if (!versioned_start::layout()) return parts::stage_bundled_runtime(bundle_root(), install, version);
-            // The versioned fresh-install stager is Task 5. For now only verify an existing runtime.
-            std::string message;
-            return parts::verify_runtime(parts::read_runtime(install), version, message);
+            return parts::stage_bundled_runtime(bundle_root(), install, launcher_update::running_version());
         }
 
         void verify_runtime_for(const show23::fs::path& install)
         {
             if (runtime_worker_busy || runtime_target == install) return;
             runtime_target = install;
-            runtime_verified = false;
+            runtime_status = {};
             runtime_worker_busy = true;
             try
             {
                 runtime_worker = std::jthread([install]
                 {
-                    bool verified{};
-                    try
-                    {
-                        verified = prepare_runtime(install);
-                    }
-                    catch (...) {}
+                    parts::runtime_check checked;
+                    try { checked = parts::inspect_bundled_runtime(bundle_root(), install, launcher_update::running_version()); }
+                    catch (...) { checked.message = "Could not verify the runtime files."; }
                     std::lock_guard lock(verify.mutex);
-                    runtime_verified = verified;
+                    runtime_status = std::move(checked);
                     runtime_worker_busy = false;
                 });
             }
@@ -422,14 +417,17 @@ namespace commands
                     utils::properties::store(property_keys::UNPACKER, value);
                 else if (key == "channel" && (value == "stable" || value == "beta"))
                 {
+                    if (!launcher_update::channel_changed(release_channel::parse_channel(value)))
+                    {
+                        response.SetBool(false);
+                        return;
+                    }
                     {
                         std::lock_guard lock(updates.mutex);
                         ++updates.generation;
                         updates.releases.fill({});
                         updates.checked = {};
                     }
-                    release_source::set_channel(release_channel::parse_channel(value));
-                    launcher_update::channel_changed();
                 }
                 else
                 {
@@ -468,20 +466,30 @@ namespace commands
             });
             ui.add_command("keep-beta", [](const auto&, rapidjson::Document& response)
             {
-                launcher_update::revoke_downgrade();
-                response.SetBool(true);
+                response.SetBool(launcher_update::revoke_downgrade());
             });
-            ui.add_command("restart-launcher-update", [](const auto&, rapidjson::Document& response)
+            ui.add_command("retry-launcher-version", [](const auto& value, rapidjson::Document& response)
             {
+                response.SetBool(launcher_update::retry(string(value, "folder")));
+            });
+            ui.add_command("restart-launcher-update", [&ui](const auto&, rapidjson::Document& response)
+            {
+                const auto install = show23::install_folder();
+                bool success{};
                 std::string error;
-                const auto success = !play_active() && !card_import_active() && launcher_update::restart(error);
-                if (play_active()) error = "Stop the game before restarting the launcher.";
-                if (card_import_active()) error = "Cancel the card import before restarting the launcher.";
+                {
+                    std::lock_guard lock(verify.mutex);
+                    const auto busy = play_active() || card_import_active() || setup_busy ||
+                        verify.busy || runtime_worker_busy || (install && parts::runtime_in_use(*install));
+                    if (busy) error = "busy";
+                    else success = launcher_update::restart(error);
+                }
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("success", success, a);
                 response.AddMember("ok", success, a);
                 response.AddMember("error", json(error, a), a);
+                if (success) ui.close_browser();
             });
             ui.add_command("open-launcher-release", [](const auto&, rapidjson::Document& response)
             {
@@ -490,8 +498,7 @@ namespace commands
                     response.SetBool(false);
                     return;
                 }
-                const auto url = L"https://github.com/ChronoRixun/show23-pc-launcher/releases/tag/v" +
-                    utils::string::convert(launcher_update::running_version());
+                const auto url = utils::string::convert(launcher_update::release_page());
                 const auto opened = ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 response.SetBool(reinterpret_cast<INT_PTR>(opened) > 32);
             });
@@ -555,8 +562,15 @@ namespace commands
                     std::lock_guard lock(verify.mutex);
                     if (set_up && versioned_start::unlocked() && !setup_busy && !verify.busy && !play_active() && !importing_cards)
                         verify_runtime_for(*install);
-                    response.AddMember("checkingRuntime", set_up && runtime_worker_busy, a);
-                    response.AddMember("ready", set_up && runtime_target == install && runtime_verified, a);
+                    const auto current = set_up && runtime_target == install;
+                    const auto in_use = set_up && (play_active() || importing_cards || parts::runtime_in_use(*install));
+                    response.AddMember("checkingRuntime", set_up && runtime_worker_busy && !repair_busy, a);
+                    response.AddMember("ready", current && runtime_status.ready, a);
+                    response.AddMember("runtimeFresh", current && runtime_status.fresh, a);
+                    response.AddMember("runtimeRepairable", current && runtime_status.repairable, a);
+                    response.AddMember("runtimeInUse", in_use, a);
+                    if (current && !runtime_status.ready && !runtime_status.fresh)
+                        response.AddMember("runtimeError", json(runtime_status.message, a), a);
                 }
                 response.AddMember("setUp", set_up, a);
                 response.AddMember("gameMissing", missing, a);
@@ -565,6 +579,51 @@ namespace commands
                 response.AddMember("version", json(version, a), a);
                 response.AddMember("updated", updated, a);
                 response.AddMember("folder", json(install ? utils::string::path_to_utf8(*install) : std::string{}, a), a);
+            });
+
+            ui.add_command("repair-runtime", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                const auto install = show23::install_folder();
+                response.SetBool(false);
+                if (!install || runtime_target != install || !runtime_status.repairable || play_active() ||
+                    importing_cards || setup_busy || verify.busy || runtime_worker_busy) return;
+                // The repair worker takes the exclusive lease before it reads or changes the slot.
+                repair_busy = runtime_worker_busy = true;
+                repair_success = false;
+                repair_error.clear();
+                try
+                {
+                    runtime_worker = std::jthread([install = *install]
+                    {
+                        std::string error;
+                        parts::runtime_check checked;
+                        try
+                        {
+                            const auto version = launcher_update::running_version();
+                            const auto bundle = bundle_root();
+                            error = parts::repair_bundled_runtime(bundle, install, version);
+                            checked = parts::inspect_bundled_runtime(bundle, install, version);
+                        }
+                        catch (...) { error = "Could not repair the runtime."; }
+                        std::lock_guard completed(verify.mutex);
+                        runtime_status = std::move(checked);
+                        repair_success = error.empty();
+                        repair_error = std::move(error);
+                        repair_busy = runtime_worker_busy = false;
+                    });
+                    response.SetBool(true);
+                }
+                catch (...) { repair_busy = runtime_worker_busy = false; }
+            });
+            ui.add_command("get-runtime-repair", [](const auto&, rapidjson::Document& response)
+            {
+                std::lock_guard lock(verify.mutex);
+                response.SetObject();
+                auto& a = response.GetAllocator();
+                response.AddMember("busy", repair_busy, a);
+                response.AddMember("success", repair_success, a);
+                response.AddMember("error", json(repair_error, a), a);
             });
 
             ui.add_command("setup-show23", [](const rapidjson::Value& value, rapidjson::Document& response)
@@ -615,7 +674,26 @@ namespace commands
                         }
                         catch (...) { outcome = setup_failure("check.internal"); }
 
+                        parts::runtime_check checked;
+                        if (outcome.finished())
+                        {
+                            try
+                            {
+                                const auto install = show23::install_folder();
+                                if (install)
+                                {
+                                    prepare_runtime(*install);
+                                    checked = parts::inspect_bundled_runtime(bundle_root(), *install, launcher_update::running_version());
+                                }
+                            }
+                            catch (...) { checked.message = "Could not verify the runtime files."; }
+                        }
                         std::lock_guard completed(verify.mutex);
+                        if (outcome.finished())
+                        {
+                            runtime_target = show23::install_folder();
+                            runtime_status = std::move(checked);
+                        }
                         setup_result = std::move(outcome);
                         setup_busy = false;
                     });
@@ -679,9 +757,14 @@ namespace commands
                             {
                                 verified = prepare_runtime(*install);
                                 outcome = {"runtime"};
-                                if (verified)
+                                parts::runtime_lease lease(*install, false);
+                                if (!lease) outcome = {"runtimeInUse"};
+                                else if (verified)
                                 {
                                     const auto runtime = parts::read_runtime(*install);
+                                    std::string details;
+                                    verified = parts::verify_runtime(runtime, launcher_update::running_version(), details);
+                                    if (!verified) throw std::runtime_error(details);
                                     const auto server_folder = parts::component_folder(runtime, parts::id::server);
                                     const auto server = show23::server_paths(server_folder);
                                     const auto emulator_folder = parts::component_folder(runtime, parts::id::emulator);
@@ -706,7 +789,8 @@ namespace commands
                         }
                         catch (...) {}
                         std::lock_guard completed(verify.mutex);
-                        runtime_verified = verified;
+                        if (verified) { runtime_status = {}; runtime_status.ready = true; }
+                        else runtime_target.reset(); // Reinspect after a failed start or incomplete stage.
                         last_play = play_stop.load() ? show23::play_result{"stopped"} : std::move(outcome);
                         play_status = idle;
                     });
@@ -767,17 +851,10 @@ namespace commands
                         }
                         catch (...) { findings.push_back({"verify.record", show23::finding_state::failed, {}}); }
                         std::string outcome;
-                        bool verified{};
-                        try
-                        {
-                            const auto install = show23::install_folder();
-                            if (install)
-                                verified = prepare_runtime(*install);
-                            outcome = parts::verify_files(parts::installed());
-                        }
+                        try { outcome = parts::verify_files(parts::installed()); }
                         catch (...) { outcome = "Could not verify the runtime files."; }
                         std::lock_guard finish(verify.mutex);
-                        runtime_verified = verified;
+                        runtime_target.reset();
                         verify.message = std::move(outcome);
                         verify.findings = std::move(findings);
                         verify.busy = false;
@@ -846,8 +923,7 @@ namespace commands
         register_cards(ui);
         ui.add_command("confirm-launcher-started", [&ui](const auto&, auto&)
         {
-            if (!versioned_start::layout()) launcher_update::confirm_started();
-            else if (IsWindowVisible(ui.get_window())) versioned_start::confirm();
+            if (versioned_start::layout() && IsWindowVisible(ui.get_window())) versioned_start::confirm();
         });
         ui.add_command("get-startup", [](const auto&, rapidjson::Document& response)
         {
@@ -857,11 +933,16 @@ namespace commands
             response.AddMember("waiting", startup == versioned_start::gate::waiting, a);
             response.AddMember("deferred", startup == versioned_start::gate::deferred, a);
             if (startup != versioned_start::gate::waiting) response.AddMember("notices", json(versioned_start::take_notices(), a), a);
-            if (startup == versioned_start::gate::open && utils::flags::has_flag("-trial"))
+            if (startup == versioned_start::gate::open)
             {
-                // A fresh extraction creates shortcuts after its first confirmed start.
-                static const auto shortcuts = [] { try { show23::update_shortcuts(false); } catch (...) {} return true; }();
-                (void)shortcuts;
+                static const auto started = []
+                {
+                    launcher_update::cleanup();
+                    if (utils::flags::has_flag("-trial"))
+                        try { show23::update_shortcuts(false); } catch (...) {}
+                    return true;
+                }();
+                (void)started;
             }
         });
     }

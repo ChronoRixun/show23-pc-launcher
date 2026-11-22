@@ -118,6 +118,15 @@
             await this.follow();
         },
 
+        async retry() {
+            const s = this.status;
+            if (!s?.failedFolder || !s.canInstall || window.IS_OFFLINE) return;
+            const choice = await window.showMessageBox(t('launcherUpdate.tryAgain'),
+                t('versionedUpdate.confirmRetry', { version: s.failedVersion }),
+                [{ label: t('common.cancel'), cancel: true }, t('launcherUpdate.tryAgain')]);
+            if (choice === 1 && await run('retry-launcher-version', { folder: s.failedFolder })) await this.refresh();
+        },
+
         async restart() {
             const result = await run('restart-launcher-update');
             if (result && result.ok) {
@@ -172,6 +181,7 @@
             switch (s.state) {
                 case 'checking': return t('launcherUpdate.checking');
                 case 'up-to-date':
+                    if (s.stableNeedsExtraction) return t('versionedUpdate.stableExtraction', { version: s.latest });
                     if (s.aheadOfStable) return t('launcherUpdate.aheadOfStable', { version: s.current, latest: s.latest });
                     return s.fromCache ? t('launcherUpdate.upToDateCached', { error: s.cacheError }) : t('launcherUpdate.upToDate');
                 case 'check-failed': return t('launcherUpdate.checkFailed', { error: s.error });
@@ -195,7 +205,7 @@
                     el('launcher-update-text').textContent = spec.text;
                     const action = el('launcher-update-action');
                     action.hidden = !spec.action;
-                    action.disabled = false;
+                    action.disabled = s.state === 'ready' && !!window.isLauncherRestartBlocked?.();
                     action.textContent = spec.action || '';
                     const progress = el('launcher-update-progress');
                     progress.hidden = spec.progress === undefined;
@@ -208,9 +218,21 @@
 
             const switchBack = el('switch-stable');
             if (switchBack) {
-                switchBack.hidden = !s?.enabled || !s.aheadOfStable || !s.canInstall ||
+                switchBack.hidden = !s?.enabled || !s.aheadOfStable || (!s.canInstall && !s.stableNeedsExtraction) ||
                     !!window.IS_OFFLINE || s.channel !== 'stable' ||
                     ['checking', 'downloading', 'ready'].includes(s.state);
+                switchBack.querySelector('span').textContent = t(s?.stableNeedsExtraction ?
+                    'launcherUpdate.releaseNotes' : 'settings.goStable');
+            }
+            const retry = el('retry-launcher-version');
+            if (retry) {
+                retry.hidden = !s?.failedFolder || !s.canInstall || !!window.IS_OFFLINE ||
+                    ['checking', 'downloading', 'ready'].includes(s.state);
+                retry.textContent = t('versionedUpdate.retry', { version: s?.failedVersion || '' });
+            }
+            for (const channel of ['stable', 'beta']) {
+                const option = el('channel-' + channel);
+                if (option) option.disabled = s?.channelChangeAllowed === false;
             }
             window.paintLauncherSummary?.();
         }
