@@ -681,6 +681,34 @@ if (process.env.SHOW23_CARD_UI_EVIDENCE === '1') {
 }
 
 
+test('Settings groups controls by the player tasks in every language', async () => {
+    const expected = [
+        ['settings-game', ['player-name', 'resolution', 'fullscreen']],
+        ['settings-updates', ['channel', 'parts', 'check-parts']],
+        ['settings-setup', ['settings-unpacker-path', 'location', 'switch-mode']],
+        ['settings-launcher', ['offline', 'language']]
+    ];
+    const headings = {
+        en: ['Game', 'Updates', 'Setup and files', 'Launcher'],
+        fr: ['Jeu', 'Mises à jour', 'Installation et fichiers', 'Lanceur'],
+        es: ['Juego', 'Actualizaciones', 'Instalación y archivos', 'Iniciador'],
+        ru: ['Игра', 'Обновления', 'Установка и файлы', 'Лаунчер']
+    };
+    for (const [language, labels] of Object.entries(headings)) {
+        const view = open({ 'get-settings': { language } });
+        await view.clock.advance(0);
+        view.id('settings').click();
+        await view.clock.advance(0);
+        const cards = [...view.id('settings-page').querySelectorAll('.panel')];
+        assert.deepEqual(cards.map(card => card.id), expected.map(([id]) => id));
+        assert.deepEqual(cards.map(card => card.querySelector('.section-h').textContent), labels);
+        expected.forEach(([id, controls]) => {
+            assert.deepEqual(controls, [...view.id(id).querySelectorAll('[id]')]
+                .map(control => control.id).filter(control => controls.includes(control)));
+        });
+    }
+});
+
 test('Resolution defaults to 1080p and saves either choice', async () => {
     let resolution;
     const view = open({
@@ -692,16 +720,24 @@ test('Resolution defaults to 1080p and saves either choice', async () => {
         }
     });
     await view.clock.advance(0);
-    const low = view.id('resolution-720p'), high = view.id('resolution-1080p');
-    assert.equal(high.getAttribute('aria-checked'), 'true');
-    low.click();
+    const choice = view.id('resolution');
+    assert.equal(choice.tagName, 'SELECT');
+    assert.equal(choice.value, '1080p');
+    view.id('settings').click();
+    await view.clock.advance(0);
+    choice.focus();
+    const nav = view.window.FocusNav;
+    nav.press('Enter', 'pad');
+    nav.press('ArrowUp', 'pad');
+    nav.press('Enter', 'pad');
     await view.clock.advance(0);
     assert.equal(resolution, '720p');
-    assert.equal(low.getAttribute('aria-checked'), 'true');
-    high.click();
+    assert.equal(choice.value, '720p');
+    choice.value = '1080p';
+    choice.dispatchEvent(new view.window.Event('change', { bubbles: true }));
     await view.clock.advance(0);
     assert.equal(resolution, '1080p');
-    assert.equal(high.getAttribute('aria-checked'), 'true');
+    assert.equal(choice.value, '1080p');
 });
 
 test('Play explains that a malformed config was left untouched', async () => {
@@ -715,3 +751,52 @@ test('Play explains that a malformed config was left untouched', async () => {
     await view.clock.advance(0);
     assert.match(view.id('play-result-text').textContent, /config\.json.*unchanged.*Play/i);
 });
+
+
+if (process.env.SHOW23_SETTINGS_UI_EVIDENCE === '1') {
+    test('Settings exports localized layouts for visual review', async () => {
+        const fs = require('node:fs');
+        const path = require('node:path');
+        const ui = path.resolve(__dirname, '../../launcher-ui');
+        const destination = path.resolve(__dirname, '../../../build/settings-evidence');
+        fs.mkdirSync(destination, { recursive: true });
+        for (const language of ['en', 'fr', 'es', 'ru']) {
+            const view = open({
+                'get-settings': {
+                    language, playerName: 'Player', resolution: '1080p', channel: 'stable',
+                    unpacker: 'Q:\\Tools\\orbis-unpkg.exe', offline: true, offlineSaved: true
+                },
+                'get-parts': {
+                    parts: ['launcher', 'emulator', 'server', 'profile'].map(part => ({
+                        part, version: '0.1.1'
+                    }))
+                }
+            });
+            await view.clock.advance(0);
+            view.id('settings').click();
+            await view.clock.advance(0);
+            view.id('location-portable').click();
+            await view.clock.advance(0);
+
+            // Reflect harness-only form properties in the exported static document.
+            for (const input of view.document.querySelectorAll('input')) {
+                if (input.value) input.setAttribute('value', input.value);
+                if (input.checked) input.setAttribute('checked', '');
+            }
+            for (const select of view.document.querySelectorAll('select')) {
+                for (const option of select.options) {
+                    if (option.value === select.value) option.setAttribute('selected', '');
+                    else option.removeAttribute('selected');
+                }
+            }
+            const source = fs.readFileSync(path.join(ui, 'main.html'), 'utf8');
+            const uri = require('node:url').pathToFileURL(ui + path.sep).href;
+            const header = source.slice(0, source.indexOf('<body>'))
+                .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\s*/g, '')
+                .replace(/<script[^>]*><\/script>\s*/g, '')
+                .replace('<head>', '<head><base href="' + uri + '">');
+            fs.writeFileSync(path.join(destination, 'settings-' + language + '.html'),
+                header + '<body>' + view.document.body.innerHTML + '</body></html>', 'utf8');
+        }
+    });
+}

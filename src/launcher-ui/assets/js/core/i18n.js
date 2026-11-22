@@ -372,7 +372,9 @@
             },
             "settings": {
                 "title": "Settings",
-                "general": "General",
+                "game": "Game",
+                "setupFiles": "Setup and files",
+                "launcherGroup": "Launcher",
                 "language": "Language",
                 "offline": "Offline mode",
                 "offlineActive": "Offline mode is active.",
@@ -769,7 +771,9 @@
             },
             "settings": {
                 "title": "Paramètres",
-                "general": "Général",
+                "game": "Jeu",
+                "setupFiles": "Installation et fichiers",
+                "launcherGroup": "Lanceur",
                 "language": "Langue",
                 "offline": "Mode hors ligne",
                 "updates": "Mises à jour",
@@ -1248,7 +1252,9 @@
             },
             "settings": {
                 "title": "Ajustes",
-                "general": "General",
+                "game": "Juego",
+                "setupFiles": "Instalación y archivos",
+                "launcherGroup": "Iniciador",
                 "language": "Idioma",
                 "offline": "Modo sin conexión",
                 "updates": "Actualizaciones",
@@ -1661,7 +1667,9 @@
             },
             "settings": {
                 "title": "Настройки",
-                "general": "Общие",
+                "game": "Игра",
+                "setupFiles": "Установка и файлы",
+                "launcherGroup": "Лаунчер",
                 "language": "Язык",
                 "offline": "Автономный режим",
                 "updates": "Обновления",

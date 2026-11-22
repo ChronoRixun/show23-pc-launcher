@@ -254,7 +254,39 @@
                 <section id="settings-page" class="page page-section" hidden>
                     <header class="page-head"><h1 class="page-title" data-i18n="settings.title">Settings</h1></header>
                     <div class="settings-grid">
-                        <section class="panel">
+                        <p class="status-line" id="settings-status" role="status" hidden></p>
+                        <section class="panel" id="settings-game">
+                            <h2 class="section-h" data-i18n="settings.game">Game</h2>
+                            <div class="set-row">
+                                <div>
+                                    <label for="player-name" data-i18n="playerName.label">Player name</label>
+                                    <p id="player-name-help" class="set-help" data-i18n="playerName.rules">Use 3 to 16 letters, digits, spaces, hyphens or underscores.</p>
+                                    <p id="player-name-status" class="set-help" role="status" hidden></p>
+                                </div>
+                                <div class="row settings-inputs">
+                                    <input id="player-name" class="path" type="text" autocomplete="off" aria-describedby="player-name-help player-name-status" data-autofocus>
+                                    <button id="save-player-name" type="button" class="btn btn-secondary" data-i18n="playerName.save">Save</button>
+                                </div>
+                            </div>
+                            <div class="set-row">
+                                <div>
+                                    <label for="resolution" data-i18n="resolution.label">Resolution</label>
+                                    <span class="set-help" id="resolution-help" data-i18n="resolution.help">Higher looks sharper; the game's frame rate is mostly limited by the processor.</span>
+                                </div>
+                                <div class="select-wrap">
+                                    <select id="resolution" aria-describedby="resolution-help">
+                                        <option value="720p" data-i18n="resolution.720p">720p (1280×720)</option>
+                                        <option value="1080p" data-i18n="resolution.1080p" selected>1080p (1920×1080)</option>
+                                    </select>
+                                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-chevron"></use></svg>
+                                </div>
+                            </div>
+                            <div class="set-row">
+                                <label for="fullscreen" data-i18n="play.fullscreen">Fullscreen</label>
+                                <input class="switch" type="checkbox" id="fullscreen" role="switch">
+                            </div>
+                        </section>
+                        <section class="panel" id="settings-updates">
                             <h2 class="section-h" data-i18n="settings.updates">Updates</h2>
                             <div class="spread channel-settings">
                                 <div><strong id="channel-label" data-i18n="updateChannel.label">Update channel</strong><p class="small faint" data-i18n="updateChannel.help">Beta gets test versions early. You can switch back to Stable any time.</p></div>
@@ -268,63 +300,44 @@
                                 <tbody id="parts"></tbody>
                             </table>
                             <div class="actions settings-actions">
-                                <button type="button" class="btn btn-secondary" id="check-parts" data-autofocus><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="settings.check">Check for updates</span></button>
+                                <button type="button" class="btn btn-secondary" id="check-parts"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-refresh"></use></svg><span data-i18n="settings.check">Check for updates</span></button>
                                 <button type="button" class="btn btn-ghost" id="switch-stable" hidden><span data-i18n="settings.goStable">Switch back to Stable</span></button>
                                 <time class="small faint checked" id="parts-checked" hidden></time>
                             </div>
                             <p class="status-line" id="update-status" role="status" hidden></p>
                         </section>
-                        <section class="panel">
-                            <h2 class="section-h" data-i18n="settings.general">General</h2>
-                            <div class="field">
+                        <section class="panel" id="settings-setup">
+                            <h2 class="section-h" data-i18n="settings.setupFiles">Setup and files</h2>
+                            <div class="set-row">
                                 <label for="settings-unpacker-path" data-i18n="package.program">Unpacker program</label>
-                                <div class="row">
+                                <div class="row settings-inputs">
                                     <input id="settings-unpacker-path" class="path" type="text" readonly>
                                     <button type="button" class="btn btn-secondary" id="settings-unpacker-pick" data-i18n="setup.browse">Browse</button>
                                     <button type="button" class="btn btn-ghost" id="settings-unpacker-clear" data-i18n="common.clear">Clear</button>
                                 </div>
                             </div>
-                            <div class="set-row set-location">
+                            <div class="set-row">
                                 <div><span class="set-name" id="location-label" data-i18n="settings.mode">Data location</span><span class="set-help" data-i18n="settings.locationHelp">Installed keeps data in AppData. Portable keeps it next to the launcher.</span></div>
-                                <div class="seg toggle-group" id="location" role="radiogroup" aria-labelledby="location-label">
-                                    <button type="button" class="toggle-btn on" id="location-installed" role="radio" aria-checked="true" tabindex="0" data-choice="installed"><span data-i18n="settings.installed">Installed</span></button>
-                                    <button type="button" class="toggle-btn" id="location-portable" role="radio" aria-checked="false" tabindex="-1" data-choice="portable"><span data-i18n="settings.portable">Portable</span></button>
+                                <div class="actions settings-controls">
+                                    <div class="seg toggle-group" id="location" role="radiogroup" aria-labelledby="location-label">
+                                        <button type="button" class="toggle-btn on" id="location-installed" role="radio" aria-checked="true" tabindex="0" data-choice="installed"><span data-i18n="settings.installed">Installed</span></button>
+                                        <button type="button" class="toggle-btn" id="location-portable" role="radio" aria-checked="false" tabindex="-1" data-choice="portable"><span data-i18n="settings.portable">Portable</span></button>
+                                    </div>
+                                    <button type="button" class="btn btn-ghost" id="switch-mode" disabled><span data-i18n="settings.applyMode">Change location and restart</span></button>
                                 </div>
-                                <button type="button" class="btn btn-ghost" id="switch-mode" disabled><span data-i18n="settings.applyMode">Change location and restart</span></button>
                             </div>
+                        </section>
+                        <section class="panel" id="settings-launcher">
+                            <h2 class="section-h" data-i18n="settings.launcherGroup">Launcher</h2>
                             <div class="set-row">
                                 <div><label for="offline" data-i18n="settings.offline">Offline mode</label><span class="set-help" data-i18n="settings.offlineHelp">Release checks and downloads are disabled after restarting in offline mode.</span></div>
                                 <input class="switch" type="checkbox" id="offline" role="switch">
-                            </div>
-                            <div class="field">
-                                <label for="player-name" data-i18n="playerName.label">Player name</label>
-                                <div class="row">
-                                    <input id="player-name" class="path" type="text" autocomplete="off" aria-describedby="player-name-help player-name-status">
-                                    <button id="save-player-name" type="button" class="btn btn-secondary" data-i18n="playerName.save">Save</button>
-                                </div>
-                                <p id="player-name-help" class="hint" data-i18n="playerName.rules">Use 3 to 16 letters, digits, spaces, hyphens or underscores.</p>
-                                <p id="player-name-status" class="hint" role="status" hidden></p>
-                            </div>
-                            <div class="set-row">
-                                <label for="fullscreen" data-i18n="play.fullscreen">Fullscreen</label>
-                                <input class="switch" type="checkbox" id="fullscreen" role="switch">
-                            </div>
-                            <div class="set-row resolution-row">
-                                <div>
-                                    <span class="set-name" id="resolution-label" data-i18n="resolution.label">Resolution</span>
-                                    <span class="set-help" id="resolution-help" data-i18n="resolution.help">Higher looks sharper; the game's frame rate is mostly limited by the processor.</span>
-                                </div>
-                                <div class="seg toggle-group" id="resolution" role="radiogroup" aria-labelledby="resolution-label" aria-describedby="resolution-help">
-                                    <button type="button" class="toggle-btn" id="resolution-720p" role="radio" aria-checked="false" tabindex="-1" data-choice="720p"><span data-i18n="resolution.720p">720p (1280×720)</span></button>
-                                    <button type="button" class="toggle-btn on" id="resolution-1080p" role="radio" aria-checked="true" tabindex="0" data-choice="1080p"><span data-i18n="resolution.1080p">1080p (1920×1080)</span></button>
-                                </div>
                             </div>
                             <div class="set-row" id="offline-status" hidden><span class="small faint" data-i18n="settings.offlineActive">Offline mode is active.</span><button type="button" class="btn btn-ghost btn-sm" id="restart-online"><span data-i18n="settings.restartOnline">Restart online</span></button></div>
                             <div class="set-row">
                                 <label for="language" data-i18n="settings.language">Language</label>
                                 <div class="select-wrap"><select id="language"><option value="en">English</option><option value="fr">Français</option><option value="es">Español</option><option value="ru">Русский</option></select><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-chevron"></use></svg></div>
                             </div>
-                            <p class="status-line" id="settings-status" role="status" hidden></p>
                         </section>
                     </div>
                 </section>

@@ -518,8 +518,9 @@
         setRadio('location', state.location);
         $('switch-mode').disabled = (state.location === 'portable') === !!saved.portable;
         $('offline').checked = !!saved.offlineSaved;
-        const choices = [...$('resolution').querySelectorAll('[data-choice]')];
-        setRadio('resolution', choices.some(choice => choice.dataset.choice === saved.resolution) ? saved.resolution : '1080p');
+        const resolution = $('resolution');
+        resolution.value = Array.from(resolution.options).some(option => option.value === saved.resolution)
+            ? saved.resolution : '1080p';
         $('fullscreen').checked = !!saved.fullscreen;
         $('player-name').value = saved.playerName || '';
         $('offline-status').hidden = !saved.offline;
@@ -852,14 +853,12 @@
                 status('player-name-status', t(saved ? 'playerName.saved' : 'settings.saveError'));
             } finally { $('save-player-name').disabled = false; }
         });
-        for (const button of $('resolution').querySelectorAll('[data-choice]')) {
-            bind(button.id, 'click', async () => {
-                if (state.savingResolution) return;
-                state.savingResolution = true;
-                try { await save('resolution', button.dataset.choice); }
-                finally { state.savingResolution = false; }
-            });
-        }
+        bind('resolution', 'change', async () => {
+            if (state.savingResolution) return;
+            state.savingResolution = true;
+            try { await save('resolution', $('resolution').value); }
+            finally { state.savingResolution = false; }
+        });
         bind('fullscreen', 'change', () => save('fullscreen', String($('fullscreen').checked)));
         bind('offline', 'change', async () => {
             const enable = $('offline').checked;
