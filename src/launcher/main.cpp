@@ -7,7 +7,10 @@
 #include "show23/child_process.hpp"
 #include "show23/server_paths.hpp"
 #include "updater/part_store.hpp"
+#include "updater/release_source.hpp"
+#include "show23/game_record.hpp"
 #include <versions/records.hpp>
+#include <versions/update_fixture.hpp>
 #include <utils/finally.hpp>
 #ifdef SHOW23_UPDATE_FIXTURE
 #include <utils/http.hpp>
@@ -198,7 +201,12 @@ namespace
         };
         const auto input = duplicate(STD_INPUT_HANDLE), output = duplicate(STD_OUTPUT_HANDLE);
         show23::child_process child;
-        if (!input || !output || !child.start(server.python, server.script.parent_path(), command, input.get(), output.get(), false))
+        bool hidden = false;
+#ifdef SHOW23_UPDATE_FIXTURE
+        hidden = !utils::http::fixture_origin().empty() &&
+            versions::plain_path(layout.versions.parent_path() / "fixture-mode");
+#endif
+        if (!input || !output || !child.start(server.python, server.script.parent_path(), command, input.get(), output.get(), hidden))
             return error("Could not start manual Play.");
         while (child.running()) Sleep(100);
         const auto code = child.exit_code().value_or(1);
@@ -209,17 +217,90 @@ namespace
 #ifdef SHOW23_UPDATE_FIXTURE
     int run_update_fixture(const std::filesystem::path& data)
     {
+        using versions::fixture::setting;
         const auto& layout = versioned_start::layout();
         const auto target = versions::read_record(data / "fixture-mode", 64);
         if (!layout || !versions::valid_version(target) || utils::http::fixture_origin().empty() ||
-            !versioned_start::confirm()) return 2;
+            !versions::fixture::enabled(data)) return 2;
+        {
+            std::ofstream trace(data / "fixture-launches.txt", std::ios::binary | std::ios::app);
+            trace << layout.folder << (utils::flags::has_flag("-trial") ? " trial " : " current ")
+                  << GetCurrentProcessId() << '\n';
+        }
+
+        const auto current = launcher_update::running_version();
+        if (setting("SHOW23_FIXTURE_BAD_VERSION") == current)
+        {
+            const auto mode = setting("SHOW23_FIXTURE_BAD_MODE");
+            if (mode == "crash") TerminateProcess(GetCurrentProcess(), 112);
+            if (mode == "hang") { Sleep(5000); return 113; }
+        }
+        if (!versioned_start::confirm()) return 2;
         while (versioned_start::status() == versioned_start::gate::waiting) Sleep(25);
         if (!versioned_start::unlocked()) return 3;
         launcher_update::cleanup();
 
-        const auto current = launcher_update::running_version();
         utils::io::write_file(data / ("fixture-confirmed-" + current + ".txt"), layout.folder);
+        if (setting("SHOW23_FIXTURE_SHORTCUTS") == "1") show23::update_shortcuts(false);
+        const auto action = setting("SHOW23_FIXTURE_ACTION");
+        if (action == "confirm") return 0;
+        const auto install = std::filesystem::path(setting("SHOW23_FIXTURE_INSTALL"));
+        if (action == "stage" || action == "inspect-runtime" || action == "repair")
+        {
+            const auto relative = install.lexically_relative(data.parent_path());
+            if (relative.empty() || relative == "." || *relative.begin() == ".." ||
+                !versions::plain_path(install, true)) return 6;
+            const auto& bundle = layout.release;
+            bool ok = true;
+            std::string error;
+            if (action == "stage") ok = parts::stage_bundled_runtime(bundle, install, current);
+            if (action == "repair")
+            {
+                error = parts::repair_bundled_runtime(bundle, install, current);
+                ok = error.empty();
+            }
+            const auto status = parts::inspect_bundled_runtime(bundle, install, current);
+            rapidjson::Document doc(rapidjson::kObjectType);
+            auto& allocator = doc.GetAllocator();
+            doc.AddMember("ready", status.ready, allocator);
+            doc.AddMember("fresh", status.fresh, allocator);
+            doc.AddMember("repairable", status.repairable, allocator);
+            doc.AddMember("inUse", parts::runtime_in_use(install), allocator);
+            doc.AddMember("ok", ok, allocator);
+            const auto& message = error.empty() ? status.message : error;
+            doc.AddMember("message", rapidjson::Value(message.c_str(), allocator), allocator);
+            rapidjson::StringBuffer buffer;
+            rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+            doc.Accept(writer);
+            utils::io::write_file(data / "fixture-runtime-result.json", buffer.GetString());
+            return 0;
+        }
         if (current == target) return 0;
+        if (action == "retry")
+        {
+            if (!launcher_update::retry(target)) return 5;
+            bool ready = false;
+            for (unsigned i = 0; i < 200; ++i)
+            {
+                rapidjson::Document state;
+                launcher_update::write_status(state, state.GetAllocator());
+                const std::string_view phase(state["state"].GetString());
+                if (phase == "ready") { ready = true; break; }
+                if (phase != "downloading") break;
+                Sleep(25);
+            }
+            launcher_update::stop();
+            return ready ? 0 : 5;
+        }
+        if (action == "switch" && !launcher_update::channel_changed(release_channel::channel::stable)) return 6;
+        std::optional<parts::runtime_lease> lease;
+        if (action == "lease-update")
+        {
+            const auto selected = show23::install_folder();
+            if (!selected || *selected != install) return 7;
+            lease.emplace(install, false);
+            if (!*lease) return 7;
+        }
         launcher_update::check();
         bool requested{};
         auto code = 4;
@@ -228,11 +309,19 @@ namespace
             rapidjson::Document state;
             launcher_update::write_status(state, state.GetAllocator());
             const std::string_view phase(state["state"].GetString());
-            if (phase == "available" && !requested) requested = launcher_update::start_download();
+            if (!requested && (phase == "available" || (action == "switch" && phase == "up-to-date")))
+                requested = launcher_update::start_download(action == "switch" ? target : std::string{});
             if (phase == "ready")
             {
                 std::string error;
-                if (launcher_update::restart(error)) code = 75;
+                if (lease)
+                {
+                    if (commands::restart_launcher(error) || error != "busy") { code = 7; break; }
+                    utils::io::write_file(data / "fixture-restart-blocked.txt", error);
+                    lease.reset();
+                }
+                if (commands::restart_launcher(error)) code = 75;
+                else utils::io::write_file(data / "fixture-error.txt", error);
                 break;
             }
             if (phase == "failed" || phase == "check-failed")
@@ -327,6 +416,14 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
     }
     catch (std::exception& e)
     {
+#ifdef SHOW23_UPDATE_FIXTURE
+        const auto& layout = versioned_start::layout();
+        if (layout && versions::fixture::enabled(layout.versions.parent_path()))
+        {
+            utils::io::write_file(layout.versions.parent_path() / "fixture-error.txt", e.what());
+            return 1;
+        }
+#endif
         MessageBoxA(nullptr, e.what(), "ERROR", MB_ICONERROR);
     }
     catch (...)

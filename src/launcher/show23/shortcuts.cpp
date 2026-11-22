@@ -1,6 +1,7 @@
 #include "std_include.hpp"
 #include "shortcuts.hpp"
 #include "versioned_start.hpp"
+#include <versions/update_fixture.hpp>
 
 #include <utils/com.hpp>
 #include <utils/finally.hpp>
@@ -67,6 +68,15 @@ namespace show23
             catch (...) { return false; }
         };
 
+#ifdef SHOW23_UPDATE_FIXTURE
+        const auto& layout = versioned_start::layout();
+        if (layout && versions::fixture::enabled(layout.versions.parent_path()))
+        {
+            const auto root = layout.versions.parent_path() / "fixture-shortcuts";
+            return {update(root / "desktop", property_keys::SHORTCUT_CREATED),
+                    update(root / "programs", property_keys::START_MENU_SHORTCUT_CREATED)};
+        }
+#endif
         const auto desktop = utils::com::get_desktop_path();
         const auto programs = utils::com::get_start_menu_programs_path();
         return {update(desktop, property_keys::SHORTCUT_CREATED),

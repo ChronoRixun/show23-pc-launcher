@@ -22,6 +22,7 @@ namespace commands
 
     bool play_active();
     bool card_import_active();
+    bool restart_launcher(std::string& error);
     void stop_workers();
     void register_all_commands(cef::cef_ui& cef_ui);
 }

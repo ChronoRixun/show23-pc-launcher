@@ -474,16 +474,8 @@ namespace commands
             });
             ui.add_command("restart-launcher-update", [&ui](const auto&, rapidjson::Document& response)
             {
-                const auto install = show23::install_folder();
-                bool success{};
                 std::string error;
-                {
-                    std::lock_guard lock(verify.mutex);
-                    const auto busy = play_active() || card_import_active() || setup_busy ||
-                        verify.busy || runtime_worker_busy || (install && parts::runtime_in_use(*install));
-                    if (busy) error = "busy";
-                    else success = launcher_update::restart(error);
-                }
+                const auto success = restart_launcher(error);
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("success", success, a);
@@ -898,6 +890,19 @@ namespace commands
     }
 
     bool card_import_active() { return importing_cards.load(); }
+
+    bool restart_launcher(std::string& error)
+    {
+        const auto install = show23::install_folder();
+        std::lock_guard lock(verify.mutex);
+        if (play_active() || card_import_active() || setup_busy || verify.busy ||
+            runtime_worker_busy || (install && parts::runtime_in_use(*install)))
+        {
+            error = "busy";
+            return false;
+        }
+        return launcher_update::restart(error);
+    }
 
     void stop_workers()
     {

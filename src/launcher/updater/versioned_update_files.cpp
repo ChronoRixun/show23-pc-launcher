@@ -1,4 +1,5 @@
 #include "versioned_update_files.hpp"
+#include <versions/update_fixture.hpp>
 
 #include <versions/records.hpp>
 #include <Windows.h>
@@ -232,6 +233,7 @@ namespace versioned_update_files
         if (marker == INVALID_HANDLE_VALUE) return "Could not lock the launcher's partial version folder.";
         marker_ = marker;
 
+        bool first = true;
         for (const auto& file : files)
         {
             if (cancelled()) return "The launcher update was cancelled.";
@@ -242,11 +244,14 @@ namespace versioned_update_files
             entry_sink output{std::ofstream(target, std::ios::binary), file.size, cancelled};
             if (!output.stream || !mz_zip_reader_extract_to_callback(&archive.zip, file.index, write_entry, &output, 0) ||
                 output.remaining || !output.stream.flush()) return "Could not extract " + file.name + " from the launcher ZIP.";
+            if (first) versions::fixture::kill_at(root_.parent_path(), "U3-extract");
+            first = false;
         }
 
         const auto result = versions::verify(folder_, versions::check_mode::partial);
         if (!result) return "The extracted launcher update failed verification (" + result.bad_file + ").";
         verified_ = true;
+        versions::fixture::kill_at(root_.parent_path(), "U4-verified");
         return {};
     }
 
@@ -274,10 +279,12 @@ namespace versioned_update_files
         {
             CloseHandle(marker_);
             marker_ = nullptr;
-            if (!DeleteFileW((folder_ / ".writing").c_str()) ||
-                !MoveFileExW(folder_.c_str(), (root_ / name).c_str(), MOVEFILE_WRITE_THROUGH))
+            if (!DeleteFileW((folder_ / ".writing").c_str())) return "Could not close the partial version.";
+            versions::fixture::kill_at(root_.parent_path(), "U5-before-rename");
+            if (!MoveFileExW(folder_.c_str(), (root_ / name).c_str(), MOVEFILE_WRITE_THROUGH))
                 return "Could not publish the verified launcher version folder.";
             owns_folder_ = false;
+            versions::fixture::kill_at(root_.parent_path(), "U5-after-rename");
         }
         folder = std::move(name);
         return {};

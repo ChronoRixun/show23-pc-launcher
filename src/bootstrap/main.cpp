@@ -1,7 +1,9 @@
 #include "process.hpp"
 #include "ui.hpp"
+#include <versions/bootstrap_update_fixture.hpp>
 #include <versions/decision.hpp>
 #include <versions/instance.hpp>
+#include <versions/update_fixture.hpp>
 #include <utils/named_mutex.hpp>
 
 #include <algorithm>
@@ -21,9 +23,10 @@ namespace bootstrap
             fs::path executable, root;
             arguments args;
             disk_view view;
-            bool retry_used{};
+            bool retry_used{}, fixture_run{};
             std::string newest;
             unsigned notices{};
+            bool empty_on_load{};
             FILETIME prior_log_time{};
 
             bool newly_extracted(const fs::path& folder) const
@@ -59,11 +62,32 @@ namespace bootstrap
                 view.folders[folder] = verify(root / folder, check_mode::quick);
             }
 
+            bool save_pointer(const decision& selected) const
+            {
+#ifdef SHOW23_UPDATE_FIXTURE
+                if (fixture_run)
+                {
+                    std::string_view label;
+                    switch (view.where)
+                    {
+                    case step::validate_names: label = "B3"; break;
+                    case step::process_request: label = "B4"; break;
+                    case step::arrival: label = view.arrival_result ? "B5-arrival" : "B5-damaged"; break;
+                    case step::choose: label = selected.next == action::launch_trial ? "B6-count" : "B6-failed"; break;
+                    case step::confirmed: label = "B8-confirm"; break;
+                    default: break;
+                    }
+                    return fixture::commit_pointer(root, view.state, *selected.save, label);
+                }
+#endif
+                return commit(root, view.state, *selected.save);
+            }
+
             decision apply(decision selected)
             {
                 if (selected.save)
                 {
-                    if (!commit(root, view.state, *selected.save))
+                    if (!save_pointer(selected))
                     {
                         const auto error = GetLastError();
                         log(root, "couldn't record the update's start or state: " + std::to_string(error));
@@ -74,6 +98,12 @@ namespace bootstrap
                         return fallback;
                     }
                     view.state = *selected.save;
+                    if (empty_on_load)
+                    {
+                        log(root, "version record created");
+                        empty_on_load = false;
+                    }
+                    if (selected.remove_request) fixture::kill_at(root.parent_path(), "B4-request-commit");
                 }
                 if (selected.invalid_request)
                 {
@@ -97,6 +127,24 @@ namespace bootstrap
                     newest, false, {}, false, false);
             }
 
+            bool had_version_record() const
+            {
+                for (const auto* name : {"pointer.txt", "pointer.bak"})
+                {
+                    std::error_code error;
+                    if (fs::exists(fs::symlink_status(root / name, error))) return true;
+                }
+                // If both files vanished, the bootstrap's own history can still distinguish
+                // a previously created record from an untouched download.
+                for (const auto* name : {"bootstrap.log", "bootstrap.log.old"})
+                {
+                    const auto history = read_record(root / name, 256 * 1024);
+                    if (history.find("Z version record created\r\n") != history.npos ||
+                        history.find("Z launch ") != history.npos) return true;
+                }
+                return false;
+            }
+
             decision load()
             {
                 const auto loaded = load_pointer(root);
@@ -106,7 +154,8 @@ namespace bootstrap
                 view.last_reason.clear();
                 view.rejected_arrivals.clear();
                 view.prepare = args.prepare;
-                if (loaded.source == pointer_source::empty)
+                empty_on_load = loaded.source == pointer_source::empty;
+                if (empty_on_load && had_version_record())
                 {
                     log(root, "rebuilt");
                     record_notice("rebuilt");
@@ -205,8 +254,10 @@ namespace bootstrap
                     if (error) reason = "could-not-start:" + std::to_string(error);
                     else
                     {
+                        if (trial) fixture::kill_at(root.parent_path(), "B7-trial-running");
                         const HANDLE waiting[]{app.confirm.get(), app.process.get()};
-                        const auto event = WaitForMultipleObjects(2, waiting, FALSE, confirmation_timeout);
+                        const auto timeout_ms = fixture_run ? 2000 : confirmation_timeout;
+                        const auto event = WaitForMultipleObjects(2, waiting, FALSE, timeout_ms);
                         timeout = event == WAIT_TIMEOUT;
                         confirmed = event == WAIT_OBJECT_0;
                         if (event == WAIT_FAILED) reason = "wait-failed:" + std::to_string(GetLastError());
@@ -240,7 +291,8 @@ namespace bootstrap
                         const auto previous = !use_previous && view.launches < launch_limit
                             ? view.state.previous : std::string{};
                         const auto choice = dialog(root, L"show23-pc " + widen(folder_version(folder)) + L" did not open",
-                            timeout ? L"No window after 120 seconds." : widen(reason), newest, timeout, previous);
+                            timeout ? (fixture_run ? L"No window after 2 seconds." : L"No window after 120 seconds.") : widen(reason),
+                            newest, timeout, previous);
                         if (choice == answer::wait)
                         {
                             const HANDLE waiting[]{app.confirm.get(), app.process.get()};
@@ -276,7 +328,7 @@ namespace bootstrap
                         bool recorded{};
                         for (unsigned attempt = 0; promote.save && attempt < 3; ++attempt)
                         {
-                            if (commit(root, view.state, *promote.save))
+                            if (save_pointer(promote))
                             {
                                 view.state = *promote.save;
                                 view.last_reason.clear();
@@ -354,19 +406,20 @@ namespace bootstrap
         app.executable = path;
         app.root = app.executable.parent_path() / "show23-pc/versions";
         app.args = parse_arguments();
+        app.fixture_run = fixture::enabled(app.root.parent_path());
+
+        const auto already_open = [&]
+        {
+            if (app.args.prepare || activate_running_window()) return 0;
+            if (app.fixture_run) log(app.root, "show23-pc is already open");
+            else MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        };
 
         utils::named_mutex bootstrap_lock(bootstrap_mutex_name);
-        if (!bootstrap_lock.try_lock(app.args.update_restart ? 30s : 3s))
-        {
-            if (!app.args.prepare && !activate_running_window()) MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
-            return 0;
-        }
+        if (!bootstrap_lock.try_lock(app.args.update_restart ? 30s : 3s)) return already_open();
         utils::named_mutex child_lock(launcher_mutex_name);
-        if (!child_lock.try_lock())
-        {
-            if (!app.args.prepare && !activate_running_window()) MessageBoxW(nullptr, L"show23-pc is already open.", L"show23-pc", MB_OK | MB_ICONINFORMATION);
-            return 0;
-        }
+        if (!child_lock.try_lock()) return already_open();
         child_lock.unlock();
 
         if (!plain_path(app.root))
@@ -375,7 +428,13 @@ namespace bootstrap
                 dialog(app.root, L"show23-pc could not open", L"No readable versions folder was found. Re-extract the launcher ZIP.", {});
             return 1;
         }
-        return app.run();
+        try { return app.run(); }
+        catch (...)
+        {
+            if (!app.fixture_run) throw;
+            log(app.root, "show23-pc could not read its version records");
+            return 1;
+        }
     }
 }
 

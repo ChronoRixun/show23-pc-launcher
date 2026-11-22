@@ -69,7 +69,7 @@ Back up the whole `data\profiles` folder to keep your progress. The launcher's o
 - The Captain card feature is unverified.
 - About 211 special cards are left out of the import because they could not be matched to a roster player.
 - Choice packs are not supported.
-- To move from version 0.1.2 or earlier, extract a new full ZIP and choose your existing game install. For versioned releases, the launcher can download a new version and test its startup before making it current.
+- To move from version 0.1.2 or earlier, extract a new full ZIP and choose your existing game install. Close the launcher and wait for it to exit before extracting over an existing portable folder. For versioned releases, the launcher can download a new version and test its startup before making it current.
 - Play uses game version 1.00. The launcher and its bundled emulator target Windows.
 - You need your own legally obtained copy of the game. Nothing here contains game files or card art.
 

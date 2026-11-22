@@ -18,7 +18,16 @@ function Get-RecordedVersion {
     $path = Join-Path $versions 'pointer.txt'
     $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     if (!$item -or $item.PSIsContainer -or $item.Length -gt 8192 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
-    $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($path))
+    try {
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            ([IO.FileShare]::Read -bor [IO.FileShare]::Delete))
+        try {
+            if ($stream.Length -gt 8192) { return }
+            $bytes = New-Object byte[] ([int] $stream.Length)
+            if ($stream.Read($bytes, 0, $bytes.Length) -ne $bytes.Length) { return }
+            $text = [Text.Encoding]::ASCII.GetString($bytes)
+        } finally { $stream.Dispose() }
+    } catch [IO.IOException] { return }
     if ($text -cnotmatch '\A(?<body>show23-pc pointer 1\r?\ncurrent (?<current>[^ \r\n]+)\r?\nprevious [^ \r\n]+\r?\ntrial (?<trial>[^ \r\n]+)\r?\nstarts [0-9]+\r?\nlast-request [^ \r\n]+\r?\n(failed [^\r\n]+\r?\n){0,8})end (?<hash>[a-f0-9]{64})\r?\n?\z') { return }
     $current = $Matches.current
     $trial = $Matches.trial

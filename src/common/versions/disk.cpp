@@ -1,4 +1,6 @@
 #include "records.hpp"
+#include "bootstrap_update_fixture.hpp"
+#include "update_fixture.hpp"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -146,8 +148,9 @@ namespace versions
     std::string read_record(const fs::path& file, std::size_t limit)
     {
         if (!plain_path(file)) return {};
-        const handle stream(CreateFileW(extended(file).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        // A reader sees one immutable snapshot and must not block an atomic replacement.
+        const handle stream(CreateFileW(extended(file).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
         if (!stream) return {};
         const auto bytes = length(stream.get());
         if (!bytes || !*bytes || *bytes > limit || *bytes > MAXDWORD) return {};
@@ -260,14 +263,43 @@ namespace versions
         return write_record(root / (loaded.repair_primary ? "pointer.txt" : "pointer.bak"), bytes);
     }
 
+    namespace
+    {
+        bool commit_records(const fs::path& root, const pointer& old, const pointer& next,
+            [[maybe_unused]] std::string_view step = {})
+        {
+            const auto before = encode(old), after = encode(next);
+            if (!parse_pointer(before) || !parse_pointer(after))
+            {
+                SetLastError(ERROR_INVALID_DATA);
+                return false;
+            }
+            if (!write_record(root / "pointer.bak", before)) return false;
+#ifdef SHOW23_UPDATE_FIXTURE
+            if (!step.empty())
+            {
+                const auto label = std::string(step);
+                fixture::kill_at(root.parent_path(), label + "-backup");
+                if (fixture::setting("SHOW23_FIXTURE_FAIL_AT") == label + "-primary" && fixture::enabled(root.parent_path()))
+                {
+                    SetLastError(ERROR_ACCESS_DENIED);
+                    return false;
+                }
+            }
+#endif
+            return write_record(root / "pointer.txt", after);
+        }
+    }
+
     bool commit(const fs::path& root, const pointer& old, const pointer& next)
     {
-        const auto before = encode(old), after = encode(next);
-        if (!parse_pointer(before) || !parse_pointer(after))
-        {
-            SetLastError(ERROR_INVALID_DATA);
-            return false;
-        }
-        return write_record(root / "pointer.bak", before) && write_record(root / "pointer.txt", after);
+        return commit_records(root, old, next);
     }
+
+#ifdef SHOW23_UPDATE_FIXTURE
+    bool fixture::commit_pointer(const fs::path& root, const pointer& old, const pointer& next, std::string_view step)
+    {
+        return commit_records(root, old, next, step);
+    }
+#endif
 }

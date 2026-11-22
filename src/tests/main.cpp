@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include "m4_runtime_proof.hpp"
 #include "test.hpp"
 #include "check_inputs_cli.hpp"
 #include "package_setup_tests.hpp"
@@ -106,6 +107,7 @@ namespace
 
 int wmain(const int argc, wchar_t** argv)
 {
+    if (argc > 1 && std::wstring_view(argv[1]) == L"--m4-runtime-proof") return m4_runtime_proof(argc, argv);
     const auto args = std::span(argv, static_cast<std::size_t>(argc));
     if (argc == 3 && std::wstring_view(argv[1]) == L"--verify-version-folder")
     {

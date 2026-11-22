@@ -1,31 +1,15 @@
 #include "ui.hpp"
 #include "process.hpp"
+#include <versions/update_fixture.hpp>
 
 #include <commctrl.h>
 #include <shellapi.h>
-#include <algorithm>
 
 
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 namespace bootstrap
 {
-    namespace
-    {
-        bool fixture_run(const versions::fs::path& root)
-        {
-#ifdef SHOW23_UPDATE_FIXTURE
-            const auto args = parse_arguments();
-            return std::ranges::find(args.flags, L"--update-fixture") != args.flags.end() &&
-                GetEnvironmentVariableW(L"SHOW23_FIXTURE_PORT", nullptr, 0) &&
-                versions::plain_path(root.parent_path() / "fixture-mode");
-#else
-            (void)root;
-            return false;
-#endif
-        }
-    }
-
     void log(const versions::fs::path& root, const std::string_view line)
     {
         const auto file = root / "bootstrap.log";
@@ -54,7 +38,15 @@ namespace bootstrap
     {
         detail += L"\n\nYour games, saves and settings are not affected.\nSee bootstrap.log in the versions folder.";
         log(root, narrow(title + L" " + detail));
-        if (fixture_run(root)) return answer::close;
+#ifdef SHOW23_UPDATE_FIXTURE
+        if (versions::fixture::enabled(root.parent_path()))
+        {
+            const auto choice = versions::fixture::setting("SHOW23_FIXTURE_DIALOG");
+            if (choice == "retry" && can_retry) return answer::retry;
+            if (choice == "previous" && !previous.empty()) return answer::previous;
+            return answer::close;
+        }
+#endif
         constexpr int wait = 100, prior = 101, retry = 102, folder = 103, release = 104;
         const auto previous_label = L"Start " + widen(previous);
         std::vector<TASKDIALOG_BUTTON> buttons;
@@ -123,7 +115,8 @@ namespace bootstrap
 
     versions::verification check_arrival(const versions::fs::path& folder, bool quiet)
     {
-        if (quiet || fixture_run(folder.parent_path())) return versions::verify(folder, versions::check_mode::full);
+        if (quiet || versions::fixture::enabled(folder.parent_path().parent_path()))
+            return versions::verify(folder, versions::check_mode::full);
         arrival_check task{folder};
         const handle worker(CreateThread(nullptr, 0, verify_arrival, &task, 0, nullptr));
         if (!worker) return versions::verify(folder, versions::check_mode::full);

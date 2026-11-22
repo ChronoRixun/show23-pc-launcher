@@ -7,6 +7,10 @@
 #include <utility>
 #include <utils/finally.hpp>
 
+#ifdef SHOW23_UPDATE_FIXTURE
+#include <versions/update_fixture.hpp>
+#endif
+
 namespace parts
 {
     namespace
@@ -54,6 +58,16 @@ namespace parts
         bool move(const fs::path& from, const fs::path& to)
         {
             return MoveFileExW(extended(from).c_str(), extended(to).c_str(), MOVEFILE_WRITE_THROUGH) != FALSE;
+        }
+
+        void fixture_cut(const fs::path& bundle, std::string_view label)
+        {
+#ifdef SHOW23_UPDATE_FIXTURE
+            versions::fixture::kill_at(bundle.parent_path().parent_path(), label);
+#else
+            (void)bundle;
+            (void)label;
+#endif
         }
 
         bool complete_layout(const installed_runtime& runtime)
@@ -466,6 +480,13 @@ namespace parts
         const auto runtime = ensure_directory(install / "runtime");
         if (!usable_directory(runtime) || !usable_directory(manifests)) return false;
         const slot_paths target(install, release);
+        const auto publish_manifests = [&](const fs::path& candidate)
+        {
+            fixture_cut(bundle, "runtime-fresh-before-manifests");
+            if (!move(candidate, target.manifests)) return false;
+            fixture_cut(bundle, "runtime-fresh-after-manifests");
+            return true;
+        };
         const auto publish_marker = [&]
         {
             if (!marker_missing(install) ||
@@ -476,7 +497,7 @@ namespace parts
         };
         if (fresh.state == fresh_state::complete)
         {
-            if (!fresh.staged_manifests.empty() && !move(fresh.staged_manifests, target.manifests)) return false;
+            if (!fresh.staged_manifests.empty() && !publish_manifests(fresh.staged_manifests)) return false;
             return publish_marker();
         }
 
@@ -485,10 +506,13 @@ namespace parts
         auto clean = utils::finally([&] { remove_stage(stage); });
         const slot_paths candidate(stage, release);
         if (!atomically_write(inspect(stage), ".fresh-stage", fresh_record(release)) ||
-            !stage_copy(bundle, source, stage, release, launcher_version) || !move(candidate.runtime, target.runtime))
+            !stage_copy(bundle, source, stage, release, launcher_version))
             return false;
+        fixture_cut(bundle, "runtime-fresh-before-slot");
+        if (!move(candidate.runtime, target.runtime)) return false;
         clean.cancel(); // On interruption the recorded stage supplies the exact manifests.
-        if (directory_at(target.manifests) == directory_state::missing && !move(candidate.manifests, target.manifests))
+        fixture_cut(bundle, "runtime-fresh-after-slot");
+        if (directory_at(target.manifests) == directory_state::missing && !publish_manifests(candidate.manifests))
             return false;
         return publish_marker();
     }
@@ -533,10 +557,23 @@ namespace parts
         const slot_paths old(plan.transaction / "old", release);
         const slot_paths staged(plan.transaction / "new", release);
         // Each rename is resumable, and no existing slot is removed.
-        if (plan.save_runtime && !move(live.runtime, old.runtime)) return "The original runtime could not be moved to its backup.";
-        if (plan.save_manifests && !move(live.manifests, old.manifests)) return "The original manifests could not be moved to their backup.";
-        if (plan.publish_manifests && !move(staged.manifests, live.manifests)) return "The replacement manifests could not be published.";
+        if (plan.save_runtime)
+        {
+            if (!move(live.runtime, old.runtime)) return "The original runtime could not be moved to its backup.";
+            fixture_cut(bundle, "runtime-repair-after-save-slot");
+        }
+        if (plan.save_manifests)
+        {
+            if (!move(live.manifests, old.manifests)) return "The original manifests could not be moved to their backup.";
+            fixture_cut(bundle, "runtime-repair-after-save-manifests");
+        }
+        if (plan.publish_manifests)
+        {
+            if (!move(staged.manifests, live.manifests)) return "The replacement manifests could not be published.";
+            fixture_cut(bundle, "runtime-repair-after-publish-manifests");
+        }
         if (!move(staged.runtime, live.runtime)) return "The replacement runtime could not be published.";
+        fixture_cut(bundle, "runtime-repair-after-publish-slot");
         return verify_runtime(read_runtime(install), launcher_version, verification) ? std::string{} : verification;
     }
 }

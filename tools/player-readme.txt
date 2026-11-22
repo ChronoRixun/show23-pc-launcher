@@ -32,7 +32,7 @@ Known limits
 - The Captain card feature is unverified.
 - About 211 special cards are left out because they could not be matched to a roster player.
 - Choice packs are not supported.
-- To upgrade from 0.1.2 or older, download this ZIP and extract it into a new folder. Then choose your existing install folder in the launcher. In-app update from 0.1.2 is unavailable.
+- To upgrade from 0.1.2 or older, download this ZIP and extract it into a new folder. Close the launcher and wait for it to exit before extracting over an existing folder. Then choose your existing install folder in the launcher. In-app update from 0.1.2 is unavailable.
 - The bundled game runtime is unchanged from 0.1.2.
 
 Problems

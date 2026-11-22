@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include <versions/update_fixture.hpp>
 #include "launcher_update.hpp"
 #include "channel_refresh.hpp"
 #include "part_manifest.hpp"
@@ -369,8 +370,9 @@ namespace launcher_update
             const auto zip = download / latest.zip;
             std::string actual;
             const auto download_error = checked_download::download_file(latest.zip_url, zip, latest.size,
-                [](std::uint64_t done, std::uint64_t total)
+                [&](std::uint64_t done, std::uint64_t total)
                 {
+                    if (done) versions::fixture::kill_at(root.parent_path(), "U2-download");
                     std::lock_guard lock(mutex_);
                     state_.done = done;
                     state_.total = total;
@@ -378,6 +380,7 @@ namespace launcher_update
             if (!download_error.empty()) return download_error;
             if (actual != sha256) return "The launcher ZIP does not match the release's SHA-256.";
 
+            versions::fixture::kill_at(root.parent_path(), "U2-downloaded");
             std::string folder;
             std::unique_lock finish(mutex_, std::defer_lock);
             {
@@ -401,6 +404,7 @@ namespace launcher_update
                 if (downgrade && !write_request_locked(folder, "switch-to-stable"))
                     return "Could not request the switch to Stable.";
             }
+            versions::fixture::kill_at(root.parent_path(), "U6-before-cleanup");
             discard_download();
             clean.cancel();
             ready_locked(folder);

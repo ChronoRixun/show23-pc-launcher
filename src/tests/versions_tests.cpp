@@ -386,7 +386,8 @@ TEST(bootstrap_prepare_repairs_and_consumes_requests_without_launching)
     const auto first = load_pointer(layout).value;
     CHECK(first.current.empty() && first.trial == "0.1.3" && first.starts == 0);
     CHECK(first.failed.size() == 1 && first.failed.front().folder == "0.1.4");
-    CHECK(read_record(layout / "bootstrap.log").find("rebuilt") != std::string::npos);
+    CHECK(read_record(layout / "bootstrap.log").find("rebuilt") == std::string::npos);
+    CHECK(!fs::exists(layout / notice_file));
 
     const pointer prior{"0.1.3"};
     const request incoming{"1234567890abcdef", "0.1.4", "retry"};
@@ -482,4 +483,39 @@ TEST(versioned_layout_resolves_stable_roots_from_a_version_slot)
     CHECK(layout.bootstrap == top / "show23-pc.exe" && layout.folder == "0.1.3-beta.2~3");
     CHECK(!versioned_start::locate(top / "show23-pc.exe"));
     CHECK(!versioned_start::locate(versions_root / "0.1.3.partial" / launcher_exe));
+}
+
+TEST(version_record_readers_allow_an_atomic_replacement_handle)
+{
+    fixture f;
+    const auto path = f.root / "pointer.txt";
+    pointer record{"0.1.3"};
+    CHECK(write_record(path, encode(record)));
+    bootstrap::handle rename_handle(CreateFileW(path.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!rename_handle) { CHECK(false); return; }
+    CHECK(parse_pointer(read_record(path)) == record);
+}
+
+TEST(bootstrap_rebuilt_notice_requires_prior_record_history)
+{
+    fixture top;
+    const auto boot = test_program().parent_path() / "show23-pc-bootstrap.exe";
+    fs::copy_file(boot, top.root / "show23-pc.exe");
+    const auto layout = top.root / "show23-pc/versions";
+    fixture payload;
+    payload.complete("0.1.3");
+    fs::create_directories(layout.parent_path());
+    fs::copy(payload.root, layout, fs::copy_options::recursive);
+
+    const auto first = prepare(top.root);
+    CHECK(first.first == 0 && first.second == "0.1.3\r\n");
+    CHECK(!fs::exists(layout / notice_file));
+
+    fs::remove(layout / "pointer.txt");
+    fs::remove(layout / "pointer.bak");
+    const auto recovered = prepare(top.root);
+    CHECK(recovered == first);
+    CHECK(parse_notices(read_record(layout / notice_file)) == 1);
+    CHECK(load_pointer(layout).value.trial == "0.1.3");
 }
