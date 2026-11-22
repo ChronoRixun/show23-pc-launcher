@@ -2,7 +2,7 @@
 setlocal DisableDelayedExpansion
 if "%~2"=="" goto usage
 if not "%~4"=="" goto usage
-set "bundle=%~dp0..\show23-pc"
+set "bundle=%~dp0.."
 set "version="
 if exist "%bundle%\manifests\runtime.txt" set /p "version="<"%bundle%\manifests\runtime.txt"
 if not defined version goto missing

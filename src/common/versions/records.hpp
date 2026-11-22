@@ -70,6 +70,11 @@ namespace versions
     std::string read_record(const fs::path& file, std::size_t limit = 8192);
     bool write_record(const fs::path& file, std::string_view bytes);
     std::string request_id();
+
+    inline constexpr char notice_file[] = "notice.txt";
+    inline constexpr std::string_view notice_ids[] = {"rebuilt", "invalid-request", "ignored-older", "counter-write"};
+    unsigned parse_notices(std::string_view text);
+    std::string encode_notices(unsigned mask);
     bool plain_path(const fs::path& path, bool allow_missing_leaf = false);
 
     enum class check_mode { quick, full, partial };

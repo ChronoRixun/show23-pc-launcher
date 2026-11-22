@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include "versioned_start.hpp"
 #include "ui_commands.hpp"
 #include "cef/cef_ui.hpp"
 
@@ -133,7 +134,7 @@ namespace commands::ui_commands
 
         // Copies the live data folder to the other root, skipping self-rebuilding caches, then
         // flips the marker and restarts. Property values ride along, so "desired" travels with the data.
-        cef_ui.add_command("switch-portable", [](const rapidjson::Value& request, rapidjson::Document& response)
+        cef_ui.add_command("switch-portable", [&cef_ui](const rapidjson::Value& request, rapidjson::Document& response)
         {
             response.SetObject();
             auto& allocator = response.GetAllocator();
@@ -172,7 +173,10 @@ namespace commands::ui_commands
                     return;
                 }
 
-                for (auto it = std::filesystem::recursive_directory_iterator(src); it != std::filesystem::recursive_directory_iterator(); ++it)
+                const auto versioned = static_cast<bool>(versioned_start::layout());
+                const auto source = versioned ? src / "user" : src;
+                for (auto it = std::filesystem::exists(source) ? std::filesystem::recursive_directory_iterator(source) :
+                        std::filesystem::recursive_directory_iterator(); it != std::filesystem::recursive_directory_iterator(); ++it)
                 {
                     const auto rel = std::filesystem::relative(it->path(), src);
                     const bool skip = rel.filename() == portable_marker.filename() || rel.filename() == move_marker.filename() ||
@@ -207,7 +211,7 @@ namespace commands::ui_commands
                 }
 
                 // Only once the switch is certain, so a failed switch never schedules deleting live data.
-                utils::io::write_file(move_marker, "");
+                if (!versioned) utils::io::write_file(move_marker, "");
             }
             catch (const std::exception& e)
             {
@@ -218,26 +222,43 @@ namespace commands::ui_commands
 
             response.AddMember("success", true, allocator);
             // Preserve command-line offline mode when changing the data location.
-            utils::nt::relaunch_self(utils::flags::has_flag("offline") ? "-offline" : "");
-            utils::nt::terminate();
+            if (versioned_start::request_restart()) cef_ui.close_browser();
+            else
+            {
+                utils::nt::relaunch_self(utils::flags::has_flag("offline") ? "-offline" : "");
+                utils::nt::terminate();
+            }
         });
 
         // Fresh process with no flags; the stored offline toggle decides the new mode.
-        cef_ui.add_command("relaunch", [](const auto&, rapidjson::Document& response)
+        cef_ui.add_command("relaunch", [&cef_ui](const auto&, rapidjson::Document& response)
         {
             if (commands::play_active() || commands::card_import_active()) { response.SetBool(false); return; }
             response.SetBool(true);
-            utils::nt::relaunch_self("");
-            utils::nt::terminate();
+            if (versioned_start::request_restart()) cef_ui.close_browser();
+            else
+            {
+                utils::nt::relaunch_self("");
+                utils::nt::terminate();
+            }
         });
 
-        cef_ui.add_command("relaunch-online", [](const auto&, rapidjson::Document& response)
+        cef_ui.add_command("relaunch-online", [&cef_ui](const auto&, rapidjson::Document& response)
         {
             if (commands::play_active() || commands::card_import_active()) { response.SetBool(false); return; }
             response.SetBool(true);
             utils::properties::store(property_keys::OFFLINE_MODE, "false");
-            utils::nt::relaunch_self(""); // empty args drops -offline
-            utils::nt::terminate();
+            if (versioned_start::layout())
+            {
+                if (!utils::flags::has_flag("offline")) versioned_start::request_restart();
+                else if (!versioned_start::hand_over(true)) { response.SetBool(false); return; }
+                cef_ui.close_browser();
+            }
+            else
+            {
+                utils::nt::relaunch_self(""); // empty args drops -offline
+                utils::nt::terminate();
+            }
         });
 
     }

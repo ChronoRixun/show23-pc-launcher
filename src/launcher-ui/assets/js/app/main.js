@@ -12,6 +12,7 @@
         play: {}, followingPlay: false, startingPlay: false, followingRuntime: false, confirmingClose: false,
         sourceKind: 'folder', setupBusy: false, setupDetails: '', location: 'installed',
         cards: {}, startingCards: false, followingCards: false,
+        startup: {},
         checking: false, savingChannel: false, maximized: false, diagnostics: ''
     };
 
@@ -82,7 +83,7 @@
             game.checkingRuntime ? t('play.runtimeChecking') :
             setUp && !ready ? t('inPlace.runtimeMissing') : game.updated ? t('play.baseOnly') : '';
         status('game-source-notice', sourceMessage);
-        $('play').disabled = !ready || active || state.startingPlay || state.cards.busy || state.startingCards;
+        $('play').disabled = !ready || state.startup.waiting || state.startup.deferred || active || state.startingPlay || state.cards.busy || state.startingCards;
         $('play').hidden = active;
         $('stop-play').hidden = !active;
         $('stop-play').disabled = phase === 'stopping';
@@ -527,6 +528,7 @@
         $('check-parts').disabled = !!saved.offline || state.checking;
         window.__setMaximized(state.maximized);
         paintHome();
+        paintStartup();
         window.LauncherUpdate.render();
     }
 
@@ -1009,6 +1011,18 @@
         wireSettings();
     }
 
+    function paintStartup() {
+        const { waiting, deferred, notices } = state.startup;
+        const known = new Set(['rebuilt', 'invalid-request', 'ignored-older', 'counter-write']);
+        const lines = (notices || '').split('\n').filter(id => known.has(id)).map(id => t('startup.' + id));
+        if (waiting) lines.unshift(t('startup.waiting'));
+        if (deferred) lines.unshift(t('startup.deferred'));
+        status('startup-notice', lines.join(' '));
+        for (const element of document.querySelectorAll('#home-hero button, #settings-page, #setup, #mods-panel')) {
+            element.inert = !!(waiting || deferred);
+        }
+    }
+
     async function init() {
         wireControls();
         window.paintLauncherSummary = paintUpdateSummary;
@@ -1016,14 +1030,27 @@
             state.settings = await run('get-settings') || {};
             state.location = state.settings.portable ? 'portable' : 'installed';
             paintSettings();
-            await Promise.all([gameState(), refreshParts(), window.LauncherUpdate.init()]);
+            state.startup = await run('get-startup') || {};
+            paintStartup();
+            await Promise.all([gameState(), refreshParts()]);
         } catch (error) {
             console.error(error);
             status('game-status', t('support.error'));
-        } finally {
             await run('show');
-            await run('confirm-launcher-started');
+            return;
         }
+        await run('show');
+        await run('confirm-launcher-started');
+        if (state.startup.waiting) {
+            for (let attempt = 0; state.startup.waiting && attempt < 55; ++attempt) {
+                await sleep(100);
+                state.startup = await run('get-startup') || { deferred: true };
+            }
+            if (state.startup.waiting) state.startup = { deferred: true };
+            paintStartup();
+            await gameState();
+        }
+        if (!state.startup.deferred) await window.LauncherUpdate.init();
     }
 
     init().catch(console.error);

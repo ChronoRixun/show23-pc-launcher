@@ -76,7 +76,7 @@ BEGIN
             VALUE "Info", "https://github.com/ChronoRixun/show23-pc-launcher"
 			      VALUE "OriginalFilename", "show23-pc.exe"
             VALUE "ProductName", "show23-pc launcher"
-            VALUE "ProductVersion", VERSION_PRODUCT
+            VALUE "ProductVersion", VERSION_RELEASE
         END
     END
     BLOCK "VarFileInfo"
@@ -91,6 +91,11 @@ END
 //
 
 IDI_ICON_1 ICON "icon.ico"
+
+STRINGTABLE
+BEGIN
+    102 "show23-pc launcher"
+END
 
 
 #endif    // English (United States) resources

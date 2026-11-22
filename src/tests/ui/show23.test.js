@@ -875,3 +875,30 @@ test('Unbundled or offline parts keep their existing status', async () => {
         assert.equal(view.id('part-status-emulator').textContent, expected);
     }
 });
+
+test('versioned launch keeps Play and update checks closed until the trial is committed', async () => {
+    let polls = 0;
+    const view = open({
+        'get-settings': { language: 'en', offline: false },
+        'get-startup': () => ++polls < 2 ? { waiting: true } : { notices: 'rebuilt\ninvalid-request\n' },
+        'get-show23': { ready: true },
+        'get-launcher-update': { enabled: true, state: 'idle' }
+    });
+    await view.clock.advance(0);
+    assert.equal(view.id('play').disabled, true);
+    assert.match(view.id('startup-notice').textContent, /Confirming/);
+    assert.equal(view.requests.some(item => item.command === 'check-launcher-update'), false);
+    assert.deepEqual(view.requests.filter(item => ['show', 'confirm-launcher-started'].includes(item.command))
+        .map(item => item.command), ['show', 'confirm-launcher-started']);
+    await view.clock.advance(101);
+    assert.equal(view.id('play').disabled, false);
+    assert.match(view.id('startup-notice').textContent, /rebuilt.*invalid version request/);
+});
+
+test('versioned launch keeps a deferred start read-only and explains the restart', async () => {
+    const view = open({ 'get-startup': { deferred: true }, 'get-show23': { ready: true } });
+    await view.clock.advance(0);
+    assert.equal(view.id('play').disabled, true);
+    assert.equal(view.id('setup-open').inert, true);
+    assert.match(view.id('startup-notice').textContent, /Restart the launcher/);
+});

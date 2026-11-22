@@ -32,9 +32,11 @@ Known limits
 - The Captain card feature is unverified.
 - About 211 special cards are left out because they could not be matched to a roster player.
 - Choice packs are not supported.
-- The launcher's self-update has not been tried yet; if it fails, download the new zip by hand.
+- To upgrade from 0.1.2 or older, download this ZIP and extract it into a new folder. Then choose your existing install folder in the launcher. In-app update from 0.1.2 is unavailable.
+- The bundled game runtime is unchanged from 0.1.2.
 
 Problems
+If show23-pc.exe is missing, re-extract the ZIP or copy show23-pc/versions/@VERSION@/bootstrap/show23-pc.exe to the top folder next to this README. Existing game saves stay in your separate install folder.
 Open an issue at https://github.com/ChronoRixun/show23-pc-launcher/issues with the text from Support > Copy diagnostics and the newest logs. Never post game files, keys or accounts.
 
 Credits

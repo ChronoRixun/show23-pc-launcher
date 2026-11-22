@@ -1,6 +1,14 @@
 (function () {
     const translations = {
         "en": {
+            "startup": {
+                "rebuilt": "The launcher rebuilt its version record.",
+                "invalid-request": "The launcher ignored an invalid version request.",
+                "ignored-older": "An older extracted launcher version was ignored.",
+                "counter-write": "The launcher could not record the update’s start.",
+                "waiting": "Confirming this launcher version…",
+                "deferred": "Restart the launcher to finish confirming this version."
+            },
             "shortcuts": {
                 "useThisCopy": "Use this copy for shortcuts",
                 "updated": "Both shortcuts now open this copy.",
@@ -497,6 +505,14 @@
             }
         },
         "fr": {
+            "startup": {
+                "rebuilt": "Le lanceur a reconstruit son registre des versions.",
+                "invalid-request": "Le lanceur a ignoré une demande de version non valide.",
+                "ignored-older": "Une ancienne version extraite du lanceur a été ignorée.",
+                "counter-write": "Le lanceur n’a pas pu enregistrer le démarrage de la mise à jour.",
+                "waiting": "Confirmation de cette version du lanceur…",
+                "deferred": "Redémarrez le lanceur pour terminer la confirmation de cette version."
+            },
             "shortcuts": {
                 "useThisCopy": "Utiliser cette copie pour les raccourcis",
                 "updated": "Les deux raccourcis ouvrent maintenant cette copie.",
@@ -987,6 +1003,14 @@
             }
         },
         "es": {
+            "startup": {
+                "rebuilt": "El lanzador reconstruyó su registro de versiones.",
+                "invalid-request": "El lanzador ignoró una solicitud de versión no válida.",
+                "ignored-older": "Se ignoró una versión anterior extraída del lanzador.",
+                "counter-write": "El lanzador no pudo registrar el inicio de la actualización.",
+                "waiting": "Confirmando esta versión del lanzador…",
+                "deferred": "Reinicia el lanzador para terminar de confirmar esta versión."
+            },
             "shortcuts": {
                 "useThisCopy": "Usar esta copia para los accesos directos",
                 "updated": "Los dos accesos directos abren ahora esta copia.",
@@ -1477,6 +1501,14 @@
             }
         },
         "ru": {
+            "startup": {
+                "rebuilt": "Программа запуска восстановила запись о версиях.",
+                "invalid-request": "Программа запуска проигнорировала недопустимый запрос версии.",
+                "ignored-older": "Более старая распакованная версия программы запуска проигнорирована.",
+                "counter-write": "Не удалось записать запуск обновления.",
+                "waiting": "Подтверждение этой версии программы запуска…",
+                "deferred": "Перезапустите программу запуска, чтобы завершить подтверждение этой версии."
+            },
             "shortcuts": {
                 "useThisCopy": "Использовать эту копию для ярлыков",
                 "updated": "Теперь оба ярлыка открывают эту копию.",

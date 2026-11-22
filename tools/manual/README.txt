@@ -6,17 +6,19 @@ install folder. The 1.21 update is optional. Manual mode needs unpacked folders.
 
 Windows
   manual\setup.cmd "C:\Games\Show23 install" "C:\Games\Show23 base" "C:\Games\Show23 update"
-  show23-pc\runtime\@VERSION@\server\python\python.exe show23-pc\runtime\@VERSION@\server\olserver.py import-cards --install "C:\Games\Show23 install" --pictures
+  manual\import-cards.cmd "C:\Games\Show23 install"
   manual\play.cmd "C:\Games\Show23 install" --fullscreen --resolution 720 --name "Player One"
 
 Linux
   sh manual/setup.sh "$HOME/show23-install" "$HOME/show23-base" "$HOME/show23-update"
-  python3 show23-pc/runtime/@VERSION@/server/olserver.py import-cards --install "$HOME/show23-install" --pictures
+  sh manual/import-cards.sh "$HOME/show23-install"
   sh manual/play.sh "$HOME/show23-install" "$HOME/bin/shadPS4" --fullscreen --resolution 720 --name "Player One"
 
 Use Python 3.10 or later on Linux and supply a Linux shadPS4 build from the
 show23-pc-emulator repository's release branch. The portable ZIP includes a
-Windows emulator only. Proton and Wine are untested. Image conversion uses
+Windows emulator only. Linux scripts use the recorded launcher version, or a
+complete version folder in a fresh ZIP. They do not require Wine and do not
+write the launcher's version record. Image conversion uses
 Pillow when available in the Linux Python environment.
 
 The import-cards line is optional. Omit --fullscreen for windowed play.

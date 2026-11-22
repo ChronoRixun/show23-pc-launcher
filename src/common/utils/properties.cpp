@@ -60,11 +60,18 @@ namespace utils::properties
         }
     }
 
-    std::filesystem::path get_portable_root()
+    namespace
     {
-        static auto portable = nt::library{}.get_folder() / "show23-pc";
-        return portable;
+        std::filesystem::path& portable_root()
+        {
+            static auto portable = nt::library{}.get_folder() / "show23-pc";
+            return portable;
+        }
     }
+
+    std::filesystem::path get_portable_root() { return portable_root(); }
+
+    void set_portable_root(std::filesystem::path path) { portable_root() = std::move(path); }
 
     std::filesystem::path get_portable_marker()
     {

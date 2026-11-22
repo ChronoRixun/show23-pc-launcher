@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include "versioned_start.hpp"
 #include "launcher_update.hpp"
 #include "release_source.hpp"
 #include "channel_refresh.hpp"
@@ -139,7 +140,9 @@ namespace launcher_update
         bool can_install()
         {
             std::error_code error;
-            return utils::properties::is_portable() && std::filesystem::exists(utils::properties::get_portable_marker(), error);
+            // A version folder must never use the legacy in-place installer.
+            return !versioned_start::layout() && utils::properties::is_portable() &&
+                std::filesystem::exists(utils::properties::get_portable_marker(), error);
         }
 
         std::filesystem::path updates_folder()

@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include "versioned_start.hpp"
 #include "commands.hpp"
 #include "mod_commands.hpp"
 #include "support_commands.hpp"
@@ -180,6 +181,22 @@ namespace commands
             });
         }
 
+        std::filesystem::path bundle_root()
+        {
+            const auto& layout = versioned_start::layout();
+            return layout ? layout.release : utils::properties::get_appdata_path();
+        }
+
+        bool prepare_runtime(const std::filesystem::path& install)
+        {
+            if (!versioned_start::unlocked()) return false;
+            const auto version = launcher_update::running_version();
+            if (!versioned_start::layout()) return parts::stage_bundled_runtime(bundle_root(), install, version);
+            // The versioned fresh-install stager is Task 5. For now only verify an existing runtime.
+            std::string message;
+            return parts::verify_runtime(parts::read_runtime(install), version, message);
+        }
+
         void verify_runtime_for(const show23::fs::path& install)
         {
             if (runtime_worker_busy || runtime_target == install) return;
@@ -193,8 +210,7 @@ namespace commands
                     bool verified{};
                     try
                     {
-                        verified = parts::stage_bundled_runtime(utils::properties::get_appdata_path(),
-                            install, launcher_update::running_version());
+                        verified = prepare_runtime(install);
                     }
                     catch (...) {}
                     std::lock_guard lock(verify.mutex);
@@ -474,8 +490,9 @@ namespace commands
                     response.SetBool(false);
                     return;
                 }
-                const auto opened = ShellExecuteW(nullptr, L"open", L"https://github.com/ChronoRixun/show23-pc-launcher/releases/latest",
-                                                  nullptr, nullptr, SW_SHOWNORMAL);
+                const auto url = L"https://github.com/ChronoRixun/show23-pc-launcher/releases/tag/v" +
+                    utils::string::convert(launcher_update::running_version());
+                const auto opened = ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 response.SetBool(reinterpret_cast<INT_PTR>(opened) > 32);
             });
             ui.add_command("check-parts", [](const auto&, rapidjson::Document& response)
@@ -487,7 +504,7 @@ namespace commands
             ui.add_command("get-parts", [](const auto&, rapidjson::Document& response)
             {
                 const auto runtime = parts::installed();
-                const auto bundle = parts::read_runtime(utils::properties::get_appdata_path());
+                const auto bundle = parts::read_runtime(bundle_root());
                 std::lock_guard lock(updates.mutex);
                 response.SetObject();
                 auto& a = response.GetAllocator();
@@ -536,7 +553,8 @@ namespace commands
                 const auto version = set_up ? (updated ? game.record->update->version : game.record->base.version) : std::string{};
                 {
                     std::lock_guard lock(verify.mutex);
-                    if (set_up && !setup_busy && !verify.busy && !play_active() && !importing_cards) verify_runtime_for(*install);
+                    if (set_up && versioned_start::unlocked() && !setup_busy && !verify.busy && !play_active() && !importing_cards)
+                        verify_runtime_for(*install);
                     response.AddMember("checkingRuntime", set_up && runtime_worker_busy, a);
                     response.AddMember("ready", set_up && runtime_target == install && runtime_verified, a);
                 }
@@ -659,8 +677,7 @@ namespace commands
                             const auto game = install ? show23::inspect_game(*install) : show23::game_presence{};
                             if (install && game.state == show23::record_state::ready)
                             {
-                                verified = parts::stage_bundled_runtime(utils::properties::get_appdata_path(),
-                                    *install, launcher_update::running_version());
+                                verified = prepare_runtime(*install);
                                 outcome = {"runtime"};
                                 if (verified)
                                 {
@@ -755,8 +772,7 @@ namespace commands
                         {
                             const auto install = show23::install_folder();
                             if (install)
-                                verified = parts::stage_bundled_runtime(utils::properties::get_appdata_path(),
-                                    *install, launcher_update::running_version());
+                                verified = prepare_runtime(*install);
                             outcome = parts::verify_files(parts::installed());
                         }
                         catch (...) { outcome = "Could not verify the runtime files."; }
@@ -828,6 +844,25 @@ namespace commands
         register_updates(ui);
         register_game(ui);
         register_cards(ui);
-        ui.add_command("confirm-launcher-started", [](const auto&, auto&) { launcher_update::confirm_started(); });
+        ui.add_command("confirm-launcher-started", [&ui](const auto&, auto&)
+        {
+            if (!versioned_start::layout()) launcher_update::confirm_started();
+            else if (IsWindowVisible(ui.get_window())) versioned_start::confirm();
+        });
+        ui.add_command("get-startup", [](const auto&, rapidjson::Document& response)
+        {
+            const auto startup = versioned_start::status();
+            response.SetObject();
+            auto& a = response.GetAllocator();
+            response.AddMember("waiting", startup == versioned_start::gate::waiting, a);
+            response.AddMember("deferred", startup == versioned_start::gate::deferred, a);
+            if (startup != versioned_start::gate::waiting) response.AddMember("notices", json(versioned_start::take_notices(), a), a);
+            if (startup == versioned_start::gate::open && utils::flags::has_flag("-trial"))
+            {
+                // A fresh extraction creates shortcuts after its first confirmed start.
+                static const auto shortcuts = [] { try { show23::update_shortcuts(false); } catch (...) {} return true; }();
+                (void)shortcuts;
+            }
+        });
     }
 }

@@ -3,6 +3,7 @@
 #include "commands/commands.hpp"
 #include "show23/shortcuts.hpp"
 #include "updater/launcher_update.hpp"
+#include "versioned_start.hpp"
 #include <versions/instance.hpp>
 
 #include <utils/flags.hpp>
@@ -97,7 +98,7 @@ namespace
 
     utils::named_mutex& singleton_mutex()
     {
-        static utils::named_mutex mutex{versions::bootstrap_mutex_name};
+        static utils::named_mutex mutex{versioned_start::layout() ? versions::launcher_mutex_name : versions::bootstrap_mutex_name};
         return mutex;
     }
 
@@ -110,7 +111,7 @@ namespace
 
     bool is_subprocess()
     {
-        return strstr(GetCommandLineA(), "--show23-subprocess");
+        return utils::flags::has_flag("-show23-subprocess");
     }
 
     void run_watchdog()
@@ -126,17 +127,25 @@ namespace
         }).detach();
     }
 
+    std::filesystem::path browser_path(const std::filesystem::path& data)
+    {
+        const auto& layout = versioned_start::layout();
+        return (layout ? layout.release : data / "data") / "cef" / CONFIG_NAME;
+    }
+
     int run_subprocess(const utils::nt::library& process, const std::filesystem::path& path)
     {
-        const cef::cef_ui cef_ui{process, path};
+        const cef::cef_ui cef_ui{process, path, browser_path(path)};
         return cef_ui.run_process();
     }
 
     void show_window(const utils::nt::library& process, const std::filesystem::path& path)
     {
-        cef::cef_ui cef_ui{process, path};
+        cef::cef_ui cef_ui{process, path, browser_path(path)};
         commands::register_all_commands(cef_ui);
-        cef_ui.create(path / "data" / "launcher-ui", "main.html");
+        const auto& layout = versioned_start::layout();
+        cef_ui.create(layout ? layout.release / "ui" : path / "data" / "launcher-ui", "main.html");
+        versioned_start::set_taskbar_target(cef_ui.get_window());
 
         cef::cef_ui::work();
         commands::stop_workers();
@@ -167,12 +176,24 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
     try
     {
         const utils::nt::library lib{instance};
+        const auto executable = lib.get_path();
+        versioned_start::initialize(executable);
+        const auto versioned = static_cast<bool>(versioned_start::layout());
+        if (!versioned && _wcsicmp(executable.filename().c_str(), L"show23-pc-launcher.exe") == 0)
+            throw std::runtime_error("Extract the entire release ZIP, then start show23-pc.exe from its top folder.");
         if (is_subprocess())
         {
             set_working_directory();
             run_watchdog();
             return run_subprocess(lib, utils::properties::get_appdata_path());
         }
+
+        if (versioned && !utils::flags::has_flag("-bootstrap"))
+        {
+            if (versioned_start::hand_over()) return 0;
+            throw std::runtime_error("Could not open show23-pc.exe from the extracted launcher folder.");
+        }
+        if (versioned && !versioned_start::accept_parent()) return 1;
 
         if (!try_become_singleton())
         {
@@ -194,7 +215,7 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
 #endif
 
         // A downloaded launcher update (portable installs) goes in now, before CEF loads its files.
-        switch (launcher_update::apply_pending())
+        if (!versioned) switch (launcher_update::apply_pending())
         {
         case launcher_update::result::relaunch:
             singleton_mutex().unlock(); // the new launcher takes it
@@ -210,19 +231,21 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         case launcher_update::result::none:
             break;
         }
-        launcher_update::cleanup();
-
-        remove_previous_data_root();
+        if (!versioned)
+        {
+            launcher_update::cleanup();
+            remove_previous_data_root();
+        }
 
         // Persistent equivalent of -offline, settable from the Settings page.
         if (utils::properties::load(property_keys::OFFLINE_MODE) == "true") utils::flags::add_flag("offline");
 
-        try { show23::update_shortcuts(false); }
+        try { if (versioned_start::unlocked()) show23::update_shortcuts(false); }
         catch (...) { printf("Error creating shortcuts\n"); }
 
         show_window(lib, path);
 
-        return 0;
+        return versioned_start::restarting() ? 75 : 0;
     }
     catch (std::exception& e)
     {

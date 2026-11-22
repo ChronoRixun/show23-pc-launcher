@@ -1,5 +1,6 @@
 #include "std_include.hpp"
 #include "shortcuts.hpp"
+#include "versioned_start.hpp"
 
 #include <utils/com.hpp>
 #include <utils/finally.hpp>
@@ -44,7 +45,7 @@ namespace show23
             if (SUCCEEDED(apartment)) CoUninitialize();
         });
 
-        const auto launcher = utils::nt::library{}.get_path();
+        const auto launcher = versioned_start::layout() ? versioned_start::layout().bootstrap : utils::nt::library{}.get_path();
         if (launcher.empty()) return {};
         const auto update = [&](const fs::path& folder, const char* created_key)
         {

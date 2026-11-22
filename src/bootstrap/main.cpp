@@ -23,6 +23,33 @@ namespace bootstrap
             disk_view view;
             bool retry_used{};
             std::string newest;
+            unsigned notices{};
+            FILETIME prior_log_time{};
+
+            bool newly_extracted(const fs::path& folder) const
+            {
+                WIN32_FILE_ATTRIBUTE_DATA data{};
+                // ZIP entries retain old modification timestamps. A fresh slot
+                // has a new directory creation time.
+                return GetFileAttributesExW(folder.c_str(), GetFileExInfoStandard, &data) &&
+                    CompareFileTime(&data.ftCreationTime, &prior_log_time) > 0;
+            }
+
+            void record_notice(std::string_view id)
+            {
+                const auto item = std::ranges::find(notice_ids, id);
+                if (item != std::end(notice_ids)) notices |= 1u << (item - std::begin(notice_ids));
+            }
+
+            void publish_notices()
+            {
+                if (!notices) return;
+                const auto file = root / notice_file;
+                const auto existing = parse_notices(read_record(file, 256));
+                if (!write_record(file, encode_notices(existing | notices)))
+                    log(root, "could not write the Home notice");
+                notices = 0;
+            }
 
             void check(const std::string& folder)
             {
@@ -40,13 +67,19 @@ namespace bootstrap
                     {
                         const auto error = GetLastError();
                         log(root, "couldn't record the update's start or state: " + std::to_string(error));
+                        if (view.where == step::choose && selected.next == action::launch_trial)
+                            record_notice("counter-write");
                         const auto fallback = failed_commit(view);
                         if (fallback.next == action::dialog_write && !args.prepare) write_dialog(error);
                         return fallback;
                     }
                     view.state = *selected.save;
                 }
-                if (selected.invalid_request) log(root, "invalid-request");
+                if (selected.invalid_request)
+                {
+                    log(root, "invalid-request");
+                    record_notice("invalid-request");
+                }
                 if (selected.remove_request && plain_path(root / "request.txt"))
                     DeleteFileW((root / "request.txt").c_str());
                 return selected;
@@ -73,8 +106,12 @@ namespace bootstrap
                 view.last_reason.clear();
                 view.rejected_arrivals.clear();
                 view.prepare = args.prepare;
-                if (loaded.source == pointer_source::empty) log(root, "rebuilt");
-                for (const auto* name : {"pointer.txt.tmp", "pointer.bak.tmp", "request.txt.tmp"})
+                if (loaded.source == pointer_source::empty)
+                {
+                    log(root, "rebuilt");
+                    record_notice("rebuilt");
+                }
+                for (const auto* name : {"pointer.txt.tmp", "pointer.bak.tmp", "request.txt.tmp", "notice.txt.tmp"})
                     if (plain_path(root / name)) DeleteFileW((root / name).c_str());
                 if (!repair_pointer(root, loaded)) log(root, "could not repair the version record");
 
@@ -100,8 +137,14 @@ namespace bootstrap
                 {
                     const auto filename = narrow(it->path().filename().native());
                     std::error_code attributes_error;
-                    if (valid_folder(filename) && plain_path(it->path()) && it->is_directory(attributes_error))
-                        check(filename);
+                    if (!valid_folder(filename) || !plain_path(it->path()) || !it->is_directory(attributes_error)) continue;
+                    check(filename);
+                    if (!view.state.current.empty() && filename != view.state.previous &&
+                        compare(filename, view.state.current) < 0 && view.folders[filename] && newly_extracted(it->path()))
+                    {
+                        log(root, filename + ": ignored older release");
+                        record_notice("ignored-older");
+                    }
                 }
                 view.where = step::arrival;
                 view.checked_arrival.clear();
@@ -252,6 +295,10 @@ namespace bootstrap
 
             int run()
             {
+                WIN32_FILE_ATTRIBUTE_DATA previous_log{};
+                const auto log_file = root / "bootstrap.log";
+                if (plain_path(log_file) && GetFileAttributesExW(log_file.c_str(), GetFileExInfoStandard, &previous_log))
+                    prior_log_time = previous_log.ftLastWriteTime;
                 unsigned restarts{};
                 for (;;)
                 {
@@ -263,6 +310,7 @@ namespace bootstrap
                         if (selected.next == action::next) selected = choose();
                         if (selected.next == action::next) continue;
                         if (selected.next == action::dialog_write) return 1;
+                        publish_notices();
                         if (selected.next == action::prepared)
                         {
                             if (print_folder(selected.folder)) return 0;

@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include "versioned_start.hpp"
 #include "part_store.hpp"
 #include "launcher_update.hpp"
 #include "show23/game_record.hpp"
@@ -13,7 +14,9 @@ namespace parts
         const auto install = show23::install_folder();
         auto result = install ? read_runtime(*install) : installed_runtime{};
 
-        const auto launcher = utils::properties::get_appdata_path() / "data" / "launcher-release" / "launcher.json";
+        const auto& layout = versioned_start::layout();
+        const auto launcher = (layout ? layout.release / "manifests" :
+            utils::properties::get_appdata_path() / "data" / "launcher-release") / "launcher.json";
         std::string local_launcher;
         std::error_code error;
         if (ordinary_path(launcher) && std::filesystem::file_size(launcher, error) <= 256 * 1024 && !error)

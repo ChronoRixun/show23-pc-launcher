@@ -1,6 +1,7 @@
 #include "test.hpp"
 #include "versions_tests.hpp"
 #include "../bootstrap/process.hpp"
+#include "../launcher/versioned_start.hpp"
 
 #include <versions/decision.hpp>
 #include <Windows.h>
@@ -459,4 +460,26 @@ TEST(bootstrap_counts_createprocess_failure_and_passes_only_the_confirm_handle)
     DWORD code{};
     CHECK(GetExitCodeProcess(child.process.get(), &code) && code == 0);
     CHECK(WaitForSingleObject(child.confirm.get(), 0) == WAIT_OBJECT_0);
+}
+
+TEST(version_notices_accept_only_the_one_shot_format)
+{
+    CHECK(parse_notices(encode_notices(15)) == 15);
+    CHECK(parse_notices(encode_notices(9)) == 9);
+    CHECK(!parse_notices(""));
+    CHECK(!parse_notices("show23-pc notice 1\nrebuilt"));
+    CHECK(!parse_notices("show23-pc notice 1\nrebuilt\nunknown\n"));
+    CHECK(!parse_notices("show23-pc notice 1\nrebuilt\nrebuilt\n"));
+}
+
+TEST(versioned_layout_resolves_stable_roots_from_a_version_slot)
+{
+    const fs::path top = L"Q:\\Fixture Folder";
+    const auto versions_root = top / L"show23-pc\\versions";
+    const auto slot = versions_root / "0.1.3-beta.2~3";
+    const auto layout = versioned_start::locate(slot / launcher_exe);
+    CHECK(layout && layout.release == slot && layout.versions == versions_root);
+    CHECK(layout.bootstrap == top / "show23-pc.exe" && layout.folder == "0.1.3-beta.2~3");
+    CHECK(!versioned_start::locate(top / "show23-pc.exe"));
+    CHECK(!versioned_start::locate(versions_root / "0.1.3.partial" / launcher_exe));
 }

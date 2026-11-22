@@ -134,10 +134,11 @@ namespace utils::nt
     {
         if (!this->is_valid()) return {};
 
-        wchar_t name[MAX_PATH]{};
-        GetModuleFileNameW(this->module_, name, MAX_PATH);
-
-        return std::filesystem::path{ name };
+        std::wstring name(32768, L'\0');
+        const auto length = GetModuleFileNameW(this->module_, name.data(), static_cast<DWORD>(name.size()));
+        if (!length || length >= name.size()) return {};
+        name.resize(length);
+        return std::filesystem::path{name};
     }
 
     std::filesystem::path library::get_folder() const

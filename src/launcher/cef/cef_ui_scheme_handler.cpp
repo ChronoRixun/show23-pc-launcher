@@ -1,4 +1,5 @@
 #include <std_include.hpp>
+#include "versioned_start.hpp"
 
 #include "cef/cef_ui_scheme_handler.hpp"
 
@@ -490,7 +491,7 @@ namespace cef
         {
             auto command_name = std::string{ command.GetString(), command.GetStringLength() };
             const auto handler = this->command_handlers_.find(command_name);
-            if (handler != this->command_handlers_.end())
+            if (handler != this->command_handlers_.end() && versioned_start::command_allowed(command_name))
             {
                 // A throwing handler must not terminate the process; report and return the partial response.
                 try

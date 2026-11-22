@@ -272,6 +272,37 @@ namespace versions
         return seal("show23-pc request 1\nid " + value.id + "\ntrial " + value.trial + "\nreason " + value.reason + '\n');
     }
 
+    unsigned parse_notices(std::string_view text)
+    {
+        constexpr std::string_view header = "show23-pc notice 1\n";
+        if (text.size() > 256 || !text.starts_with(header) || !text.ends_with('\n')) return 0;
+        text.remove_prefix(header.size());
+        unsigned result{};
+        while (!text.empty())
+        {
+            const auto end = text.find('\n');
+            const auto id = std::ranges::find(notice_ids, text.substr(0, end));
+            if (id == std::end(notice_ids)) return 0;
+            const auto bit = 1u << (id - std::begin(notice_ids));
+            if (result & bit) return 0;
+            result |= bit;
+            text.remove_prefix(end + 1);
+        }
+        return result;
+    }
+
+    std::string encode_notices(unsigned mask)
+    {
+        std::string text = "show23-pc notice 1\n";
+        for (std::size_t i = 0; i < std::size(notice_ids); ++i)
+            if (mask & (1u << i))
+            {
+                text += notice_ids[i];
+                text += '\n';
+            }
+        return text;
+    }
+
     loaded_pointer select_pointer(const std::optional<pointer>& primary, const std::optional<pointer>& backup)
     {
         if (primary) return {*primary, pointer_source::primary, false, !backup};

@@ -46,6 +46,13 @@ end
 local function version_info()
     local tag = git_value("describe --tags --abbrev=0 --match v[0-9]*")
     local describe = git_value("describe --tags --dirty --always --match v[0-9]*")
+    local release = os.getenv("SHOW23_PACKAGE_VERSION")
+    if release and release ~= "" then
+        local stable = release:match("^%d+%.%d+%.%d+$")
+        local beta = release:match("^%d+%.%d+%.%d+%-beta%.%d+$")
+        assert(stable or beta, "SHOW23_PACKAGE_VERSION must be a stable or numbered Beta tag.")
+        tag, describe = "v" .. release, "v" .. release
+    end
     local major, minor, patch = tag:match("^v(%d+)%.(%d+)%.(%d+)")
     local core = table.concat({major or "0", minor or "1", patch or "0"}, ".")
     local revision = tonumber(git_value("rev-list --count HEAD")) or 0
@@ -80,11 +87,12 @@ newaction {
 #define GIT_TAG %q
 #define VERSION_PRODUCT_RC %s
 #define VERSION_PRODUCT %q
+#define VERSION_RELEASE %q
 #define VERSION_FILE_RC %s,%d
 #define VERSION_FILE %q
 #define VERSION GIT_DESCRIBE
 #define SHORTVERSION VERSION_PRODUCT
-]], describe, tag, rc, core, rc, revision, core .. "." .. revision)
+]], describe, tag, rc, core, tag:match("^v(.+)$") or core, rc, revision, core .. "." .. revision)
         write_changed("build/src/version.h", header)
         write_changed("build/src/version.hpp", '#pragma once\n#include "version.h"\n')
     end
@@ -180,7 +188,13 @@ if _OPTIONS["copy-to"] then
     postbuildcommands {"copy /y \"$(TargetPath)\" \"" .. _OPTIONS["copy-to"] .. "\""}
 end
 
+filter "files:src/launcher/versioned_start.cpp"
+    flags {"NoPCH"}
+filter {}
+
 dependencies.imports()
+-- CEF is initialized with no_sandbox and never uses the static sandbox.
+removelinks {"cef_sandbox"}
 
 
 project "show23-pc-bootstrap"
@@ -208,7 +222,7 @@ project "show23-pc-tests"
 dependson {"show23-pc-bootstrap"}
 kind "ConsoleApp"
 language "C++"
-files {"./src/tests/**.hpp", "./src/tests/**.cpp", "./src/bootstrap/process.cpp",
+files {"./src/tests/**.hpp", "./src/tests/**.cpp", "./src/bootstrap/process.cpp", "./src/launcher/versioned_start.cpp",
        "./src/launcher/updater/swap_retry.cpp", "./src/launcher/updater/release_channel.cpp",
        "./src/launcher/updater/release_resolver.cpp", "./src/launcher/updater/part_manifest.cpp",
        "./src/launcher/support/redact.cpp", "./src/launcher/support/report_rules.cpp",

@@ -1,4 +1,5 @@
 #include <std_include.hpp>
+#include "versioned_start.hpp"
 
 #include "cef/cef_ui.hpp"
 #include "commands/commands.hpp"
@@ -310,6 +311,7 @@ namespace cef
 
     void cef_ui_handler::save_window_placement(const HWND window) const
     {
+        if (!versioned_start::unlocked()) return;
         // Once closing, ignore saves: teardown un-maximizes the window (WM_SIZE/SIZE_RESTORED),
         // which would otherwise clobber the maximized flag we saved when the user maximized.
         if (GetPropA(window, "show23_closing"))

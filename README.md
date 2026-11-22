@@ -90,25 +90,27 @@ build\bin\x64\Release\show23-pc-tests.exe
 node src\tests\ui\run.js
 ~~~
 
-The Release executable is `build\bin\x64\Release\show23-pc.exe`. To run from the build output in installed mode, first stage its runtime with `powershell -File tools\stage-runtime.ps1`. In installed mode the launcher uses `%LOCALAPPDATA%\show23-pc`. To prepare a launcher-only portable archive locally, run `powershell -File tools\package-portable.ps1 -Version 0.1.0` after building Release. The archive stages `show23-pc.exe` next to its `show23-pc\portable.marker` and browser files. Game data belongs in the separate chosen install layout described in the [design](docs/design.md). The Settings data location control moves launcher settings and the embedded browser between portable and installed modes.
+The build produces the real launcher at `build\bin\x64\Release\show23-pc.exe` and the bootstrap at `build\bin\x64\Release\show23-pc-bootstrap.exe`. For developer runs from the build directory, stage the browser first with `tools\stage-runtime.ps1`. The installed data root remains `%LOCALAPPDATA%\show23-pc`. In a release ZIP, browser files are kept with their version and the Settings data location control moves user settings only.
 
 For source setup, `generate.bat` fetches the five repositories listed in `.gitmodules` from GitHub when initialized as submodules. In a plain source directory it fetches the pinned source archives from `https://codeload.github.com/<owner>/<repo>/zip/<commit>`. CEF is fetched from `https://cef-builds.spotifycdn.com/<cef-build>.tar.bz2`. These are developer build-time contacts.
 
 ### Package the playable release
 
-Build Release x64, then run the following with the release emulator (`shadPS4.exe` built from branch `release` of [show23-pc-emulator](https://github.com/ChronoRixun/show23-pc-emulator)), the server folder of [show23-pc](https://github.com/ChronoRixun/show23-pc), the official Windows x64 embeddable Python zip, the emulator licence and the full 40-character commit used to build that executable.
+Build Release x64 with the exact tag in SHOW23_PACKAGE_VERSION, then pass the frozen 0.1.2 portable ZIP and its release manifest to the packager. For example, to package the first versioned Beta:
 
-~~~powershell
-.\tools\package-release.ps1 -Version 0.1.0 -Emulator $emulator -Server $server -PythonEmbedZip $pythonZip -EmulatorLicense $emulatorLicense -EmulatorCommit $emulatorCommit -PillowWheel $pillowWheel
-~~~
+```powershell
+$env:SHOW23_PACKAGE_VERSION = '0.1.3-beta.1'
+# Build Release x64 with that environment before running the packager.
+.\tools\package-release.ps1 -Version 0.1.3-beta.1 -MinLauncher 0.1.3-beta.1 -FrozenRuntimeZip $frozenZip -FrozenRuntimeManifest $frozenManifest
+```
 
-The output in `dist/` is `show23-pc-0.1.0-win64-portable.zip`, `launcher.json` and `SHA256SUMS.txt`; the updater looks for exactly those three names, so publish exactly those three files in the GitHub release. The zip carries the launcher, the embedded browser, the emulator, the server, the embeddable Python, the player `README.txt` (from `tools/player-readme.txt`), a `LICENSES` folder and a checksum list. The server licence defaults to `LICENSE` in the parent of the supplied server directory; use `-ServerLicense` to specify another location. The server must support self-contained certificate generation.
+Both packager entry points produce one portable ZIP, its release manifest and SHA256SUMS.txt. Use the same -MinLauncher value for subsequent versioned releases, including Stable, if a Beta was published first. The packager checks the 0.1.2 ZIP against its release manifest and verifies every bundled runtime file. The ZIP contains the bootstrap, one complete version folder, stable manual forwarders, the player README and licences. Publish the three assets together.
 
 `-PillowWheel` takes a local Pillow wheel that matches the embedded Python's ABI for Windows x64 (0.1.0 uses Python 3.14.7 and Pillow 13.0.0, `cp314`). It enables conversion of imported PNG and JPEG card art to WebP; without it those few pictures fall back to the plain player photo.
 
 ### Update channels
 
-Stable is the default and selects final releases. Beta includes pre-releases. Settings → Updates shows the installed version for the launcher, emulator, server and profile. A pre-release is marked Beta. The launcher asks before switching a portable Beta back to an older Stable release. Keep the beta leaves it installed. Tagged Release builds in installed mode can open the release page for a manual update. Parts without a separate release are marked **Included with the launcher** when bundled. The Installed column shows the version active in the game install. The in-app updater replaces the launcher files. A full ZIP includes the runtime; the launcher uses that bundle when staging a runtime for a game install without a working one. Release assets and compatibility rules are documented in [Release manifests](docs/release-manifest.md).
+Stable is the default and selects final releases. Beta includes pre-releases. Settings → Updates shows the installed version for the launcher, emulator, server and profile. A pre-release is marked Beta. The launcher asks before switching a portable Beta back to an older Stable release. Keep the beta leaves it installed. Tagged Release builds in installed mode can open the release page for a manual update. Parts without a separate release are marked **Included with the launcher** when bundled. The Installed column shows the version active in the game install. A full ZIP includes the frozen 0.1.2 game runtime. On a versioned install, the bootstrap runs the selected launcher version from its own folder and keeps user settings in the shared data folder. Release assets and compatibility rules are documented in [Release manifests](docs/release-manifest.md).
 
 ## Privacy
 

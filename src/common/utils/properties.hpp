@@ -12,6 +12,7 @@ namespace utils::properties
     // Portable mode: -portable flag or a marker file inside the exe-side data folder.
     bool is_portable();
     std::filesystem::path get_portable_root();
+    void set_portable_root(std::filesystem::path path);
     std::filesystem::path get_local_root();
     std::filesystem::path get_portable_marker();
     // Left in the new root by a data move; its presence tells the next start to delete the other root.
