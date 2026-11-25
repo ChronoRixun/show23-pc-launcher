@@ -84,7 +84,8 @@
             game.checkingRuntime ? t('play.runtimeChecking') :
             game.runtimeFresh ? t('runtimeRepair.fresh') :
             game.runtimeError ? t('runtimeRepair.problem', { detail: game.runtimeError }) :
-            setUp && !ready ? t('inPlace.runtimeMissing') : game.updated ? t('play.baseOnly') : '';
+            setUp && !ready ? t('inPlace.runtimeMissing') :
+            [game.firstStart && t('play.firstStart'), game.updated && t('play.baseOnly')].filter(Boolean).join(' ');
         status('game-source-notice', sourceMessage);
         const locked = state.startup.waiting || state.startup.deferred;
         const repair = $('repair-runtime');
@@ -973,7 +974,7 @@
         status('play-result-text', message);
         status('play-result-log', current.log);
         $('play-result').hidden = !message;
-        const warning = current.nameWarning || (state.nameSaveFailed ? 'saveFailed' : '');
+        const warning = state.nameSaveFailed ? 'saveFailed' : '';
         status('player-name-warning', warning ? t('playerName.' + warning) : '');
     }
 

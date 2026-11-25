@@ -46,6 +46,8 @@ TEST(manifest_validates_file_paths_and_checksums)
         return std::format(R"({{"path":"{}","size":{},"sha256":"{}"}})", path, size, hash);
     };
     const std::string hash(64, 'a');
+    CHECK(parts::parse(fixture("emulator", "1.2.3", "stable", "0.1.0", file("libc++.dll", "1", hash),
+        R"("launcher":"*","server":"*","profile":"*")"), error));
     for (const auto path : {"", "../x", "one/../x", "/x", "one//x", "one/x/", "one/./x", "one/NUL.txt", "x.", "q:y", "q\\\\x"})
         CHECK(!parts::parse(fixture("server", "1.2.3", "stable", "0.1.0", file(path, "1", hash)), error));
     for (const auto size : {"-1", "1.0", "\"1\"", "18446744073709551616"})

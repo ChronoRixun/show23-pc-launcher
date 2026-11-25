@@ -44,6 +44,22 @@ namespace
             throw std::runtime_error("Could not write play test fixture");
     }
 
+    const auto cache_key = "v1-" + std::string(64, 'a') + "-" + std::string(16, 'b');
+
+    fs::path fixture_cache(const fs::path& install)
+    {
+        return install / "data/engine-cache/CUSA35521" / cache_key;
+    }
+
+    std::wstring environment(const wchar_t* name)
+    {
+        const auto size = GetEnvironmentVariableW(name, nullptr, 0);
+        if (!size) return {};
+        std::wstring value(size, L'\0');
+        value.resize(GetEnvironmentVariableW(name, value.data(), size));
+        return value;
+    }
+
     struct play_fixture
     {
         fs::path root;
@@ -60,9 +76,13 @@ namespace
             request.base = root / "base path";
             request.server = root / "server directory" / "olserver.py";
             request.python = request.server.parent_path() / "fake-server.exe";
-            request.emulator = root / "emulator directory" / "fake-emulator.exe";
+            request.engine = root / "engine directory";
+            request.player_name = "Local Batter";
+            request.display_resolution = *find_resolution("720p");
             request.fullscreen = true;
-            fs::create_directories(request.emulator.parent_path());
+            write(request.engine / "prepare.py", "fixture");
+            write(request.engine / "bbport.ini", "default config");
+            write(request.engine / "input.ini", "default input");
             fs::create_directories(request.install / "data/logs");
             fs::create_directories(request.install / "data/profiles/default/server");
             write(request.base / "eboot.bin", "fixture");
@@ -70,7 +90,7 @@ namespace
             wchar_t path[MAX_PATH]{};
             if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) throw std::runtime_error("Could not locate test executable");
             fs::copy_file(path, request.python);
-            fs::copy_file(path, request.emulator);
+            fs::copy_file(path, request.engine / "bb-probe.exe");
             if (WSAStartup(MAKEWORD(2, 2), &network)) throw std::runtime_error("Could not initialize fixture sockets");
             const auto choose_ports = [&]
             {
@@ -89,10 +109,10 @@ namespace
             fs::remove_all(root, ignored);
         }
 
-        void modes(std::string_view server, std::string_view emulator)
+        void modes(std::string_view server, std::string_view engine, std::string_view prepare = "success")
         {
             const auto p1 = std::to_string(options.ports[0]), p2 = std::to_string(options.ports[1]);
-            write(request.install / "test-modes", std::string(server) + "\n" + std::string(emulator) + "\n" + p1 + "\n" + p2);
+            write(request.install / "test-modes", std::string(server) + "\n" + std::string(engine) + "\n" + p1 + "\n" + p2 + "\n" + std::string(prepare));
         }
 
         fs::path profile() const { return request.install / "data/profiles/default"; }
@@ -121,30 +141,55 @@ namespace
 std::optional<int> fake_play_child(const std::span<wchar_t*> args)
 {
     const auto image = fs::path(args.front());
-    const bool server = image.filename() == "fake-server.exe";
-    const bool emulator = image.filename() == "fake-emulator.exe";
-    if (!server && !emulator) return std::nullopt;
-    if ((server && args.size() != 5) || (emulator && args.size() != 8)) return 90;
+    const bool python = image.filename() == "fake-server.exe";
+    const bool engine = image.filename() == "bb-probe.exe";
+    if (!python && !engine) return std::nullopt;
+    const bool prepare = python && args.size() == 9;
+    if ((python && !prepare && args.size() != 5) || (engine && args.size() != 12)) return 90;
 
     const auto cwd = fs::current_path();
-    const auto install = server ? fs::path(args[4]) : cwd.parent_path().parent_path().parent_path();
+    const auto install = python ? fs::path(args[prepare ? 6 : 4]) : image.parent_path().parent_path() / "install path";
     const auto profile = install / "data/profiles/default";
+    const auto native = profile / "engine";
     const auto base = install.parent_path() / "base path";
+    const auto cache = fixture_cache(install);
     const auto expected_ca = profile / "server/ca.pem";
     const auto is = [&](std::size_t n, std::wstring_view expected) { return std::wstring_view(args[n]) == expected; };
-    if (server ? (!is(3, L"--install") || !fs::equivalent(cwd, image.parent_path()) ||
-                   !fs::equivalent(fs::path(args[1]), cwd / "olserver.py")) :
-                 (!is(1, L"-g") || !is(3, L"-i") || !is(4, L"-f") || !is(5, L"true") || !is(6, L"--show23-local-ca") ||
-                   !fs::equivalent(fs::path(args[2]), base / "eboot.bin") ||
-                   !fs::equivalent(fs::path(args[7]), expected_ca) || !fs::equivalent(cwd, profile))) return 91;
-    std::string server_mode, emulator_mode;
+    std::string server_mode, engine_mode, prepare_mode;
     std::uint16_t port_a{}, port_b{};
-    if (!(std::ifstream(install / "test-modes") >> server_mode >> emulator_mode >> port_a >> port_b)) return 92;
-    if (emulator)
+    if (!(std::ifstream(install / "test-modes") >> server_mode >> engine_mode >> port_a >> port_b >> prepare_mode)) return 92;
+
+    if (prepare)
     {
-        write(profile / "emulator-pid", std::to_string(GetCurrentProcessId()));
-        if (emulator_mode == "hang") Sleep(INFINITE);
-        if (emulator_mode == "bad")
+        if (!is(1, L"-B") || !is(2, L"-X") || !is(3, L"utf8") || !is(4, L"-u") ||
+            !is(7, L"--launcher-result") || !fs::equivalent(fs::path(args[5]), cwd / "prepare.py") ||
+            !fs::equivalent(cwd, install.parent_path() / "engine directory")) return 91;
+        write(profile / "prepare-pid", std::to_string(GetCurrentProcessId()));
+        if (prepare_mode == "hang") Sleep(INFINITE);
+        if (prepare_mode == "bad") { std::fputs("Fixture preparation failed\n", stderr); return 19; }
+        write(cache / "boot-linked.bin", "prepared boot");
+        write(cache / "content.bin", "prepared content");
+        write(args[8], prepare_mode == "invalid" ? "..\\outside" : cache_key);
+        return 0;
+    }
+    if (engine)
+    {
+        if (!is(2, L"--content-profile") || !is(4, L"--app0") || !is(6, L"--user") || !is(8, L"--timeout") ||
+            !is(9, L"0") || !is(10, L"--show23-local-ca") || !fs::equivalent(cwd, image.parent_path()) ||
+            !fs::equivalent(fs::path(args[1]), cache / "boot-linked.bin") ||
+            !fs::equivalent(fs::path(args[3]), cache / "content.bin") || !fs::equivalent(fs::path(args[5]), base) ||
+            !fs::equivalent(fs::path(args[7]), native / "user") || !fs::equivalent(fs::path(args[11]), expected_ca))
+            return 91;
+        if (environment(L"SystemDrive").empty() || environment(L"SystemRoot").empty() ||
+            environment(L"BB_FULLSCREEN") != (engine_mode == "windowed" ? L"0" : L"1") ||
+            environment(L"BB_WINDOW_SIZE") != L"1280x720" || environment(L"BB_USER_NAME") != L"Local Batter" ||
+            environment(L"BB_PRESENT_MODE") != L"Mailbox" || environment(L"BB_READBACK_TARGETS") != L"256x512" ||
+            fs::path(environment(L"BB_CONFIG")) != native / "bbport.ini" ||
+            fs::path(environment(L"BB_INPUT_CONFIG")) != native / "input.ini" ||
+            fs::path(environment(L"BB_GPU_USER_DIR")) != native / "user") return 96;
+        write(profile / "engine-pid", std::to_string(GetCurrentProcessId()));
+        if (engine_mode == "hang") Sleep(INFINITE);
+        if (engine_mode == "bad")
         {
             for (int line = 1; line <= 25; ++line) std::printf("diagnostic line %02d\n", line);
             std::fflush(stdout);
@@ -153,6 +198,8 @@ std::optional<int> fake_play_child(const std::span<wchar_t*> args)
         }
         return 0;
     }
+    if (!is(3, L"--install") || !fs::equivalent(cwd, image.parent_path()) ||
+        !fs::equivalent(fs::path(args[1]), cwd / "olserver.py")) return 91;
     if (is(2, L"gen-certs"))
     {
         if (server_mode == "no-cert") { std::fputs("Fixture could not create certificate\n", stderr); return 11; }
@@ -181,7 +228,9 @@ TEST(play_generates_the_ca_uses_exact_arguments_and_stops_server_after_success)
     CHECK(result.message == std::string_view("finished"));
     CHECK(fs::exists(f.ca()));
     CHECK(f.terminated("server-pid"));
-    CHECK(f.terminated("emulator-pid"));
+    CHECK(f.terminated("engine-pid"));
+    CHECK(f.terminated("prepare-pid"));
+    CHECK(std::ranges::find(phases, play_phase::preparing) != phases.end());
     CHECK(std::ranges::find(phases, play_phase::certificates) != phases.end());
     CHECK(std::ranges::find(phases, play_phase::playing) != phases.end());
 }
@@ -193,7 +242,7 @@ TEST(play_reports_certificate_generation_failure_with_diagnostics)
     const auto result = run_play(f.request, f.options);
     CHECK(result.message == std::string_view("certExit") && result.number == 11);
     CHECK(result.log.find("could not create certificate") != std::string::npos);
-    CHECK(!f.pid("server-pid") && !f.pid("emulator-pid"));
+    CHECK(!f.pid("server-pid") && !f.pid("engine-pid"));
 }
 
 TEST(play_refuses_a_named_port_before_starting_children)
@@ -213,7 +262,7 @@ TEST(play_handles_early_server_exit_and_preserves_output)
     const auto result = run_play(f.request, f.options);
     CHECK(result.message == std::string_view("serverExit") && result.number == 17);
     CHECK(result.log.find("startup failed") != std::string::npos);
-    CHECK(!f.pid("emulator-pid"));
+    CHECK(!f.pid("engine-pid"));
 }
 
 TEST(play_times_out_and_stops_an_unready_server)
@@ -225,7 +274,7 @@ TEST(play_times_out_and_stops_an_unready_server)
     const auto result = run_play(f.request, f.options);
     CHECK(result.message == std::string_view("serverTimeout"));
     CHECK(f.terminated("server-pid"));
-    CHECK(!f.pid("emulator-pid"));
+    CHECK(!f.pid("engine-pid"));
 }
 
 TEST(play_includes_only_the_last_twenty_log_lines_for_a_fast_failure)
@@ -233,7 +282,7 @@ TEST(play_includes_only_the_last_twenty_log_lines_for_a_fast_failure)
     play_fixture f;
     f.modes("listen", "bad");
     const auto result = run_play(f.request, f.options);
-    CHECK(result.message == std::string_view("emulatorExit") && result.number == 12);
+    CHECK(result.message == std::string_view("engineExit") && result.number == 12);
     CHECK(result.log.find("Wrong executable") != std::string::npos);
     CHECK(result.log.find("diagnostic line 07") != std::string::npos);
     CHECK(result.log.find("diagnostic line 06") == std::string::npos);
@@ -245,25 +294,63 @@ TEST(play_stop_ends_both_live_processes)
     play_fixture f;
     f.modes("listen", "hang");
     const auto limit = GetTickCount64() + 5000;
-    f.options.stop = [&] { return f.pid("emulator-pid") != 0 || GetTickCount64() >= limit; };
+    f.options.stop = [&] { return f.pid("engine-pid") != 0 || GetTickCount64() >= limit; };
     const auto result = run_play(f.request, f.options);
     CHECK(result.message == std::string_view("stopped"));
-    CHECK(f.terminated("server-pid") && f.terminated("emulator-pid"));
+    CHECK(f.terminated("server-pid") && f.terminated("engine-pid"));
 }
 
 
-TEST(play_blocks_before_starting_server_on_malformed_resolution_config)
+TEST(play_preserves_legacy_files_and_existing_engine_settings)
 {
-    play_fixture fixture;
-    fixture.modes("listen", "success");
-    const auto config = fixture.profile() / "user/config.json";
+    play_fixture f;
+    f.request.fullscreen = false;
+    f.modes("listen", "windowed");
+    const auto config = f.profile() / "user/config.json";
+    const auto users = f.profile() / "user/users.json";
+    const auto save = f.profile() / "user/1000/savedata/save";
+    const auto engine_config = f.profile() / "engine/bbport.ini";
     write(config, "{malformed");
-    const auto result = run_play(fixture.request, fixture.options);
-    CHECK(result.message == std::string_view("resolutionMalformed"));
-    CHECK(!fs::exists(fixture.ca()));
-    CHECK(!fixture.pid("server-pid"));
-    CHECK(!fixture.pid("emulator-pid"));
-    std::string source;
-    std::ifstream(config) >> source;
-    CHECK(source == "{malformed");
+    write(users, "existing-users");
+    write(save, "old-save");
+    write(engine_config, "custom-config");
+    const auto result = run_play(f.request, f.options);
+    CHECK(result.message == std::string_view("finished"));
+    for (const auto& [path, expected] : {std::pair{config, "{malformed"}, std::pair{users, "existing-users"},
+                                       std::pair{save, "old-save"}, std::pair{engine_config, "custom-config"},
+                                       std::pair{f.profile() / "engine/input.ini", "default"}})
+    {
+        std::string value;
+        std::ifstream(path) >> value;
+        CHECK(value == expected);
+    }
+}
+
+TEST(play_reports_preparation_errors_without_starting_the_server)
+{
+    for (const auto* mode : {"bad", "invalid"})
+    {
+        play_fixture f;
+        f.modes("listen", "success", mode);
+        const auto result = run_play(f.request, f.options);
+        if (std::string_view(mode) == "bad")
+        {
+            CHECK(result.message == std::string_view("prepareExit") && result.number == 19);
+            CHECK(result.log.find("Fixture preparation failed") != std::string::npos);
+        }
+        else CHECK(result.message == std::string_view("prepareOutput"));
+        CHECK(!f.pid("server-pid") && !fs::exists(f.ca()));
+    }
+}
+
+TEST(play_stop_terminates_preparation_without_starting_the_server)
+{
+    play_fixture f;
+    f.modes("listen", "success", "hang");
+    const auto limit = GetTickCount64() + 5000;
+    f.options.stop = [&] { return f.pid("prepare-pid") != 0 || GetTickCount64() >= limit; };
+    const auto result = run_play(f.request, f.options);
+    CHECK(result.message == std::string_view("stopped"));
+    CHECK(f.terminated("prepare-pid"));
+    CHECK(!f.pid("server-pid") && !fs::exists(f.ca()));
 }

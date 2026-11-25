@@ -16,6 +16,7 @@ namespace parts
 
     constexpr std::size_t index(id part) { return static_cast<std::size_t>(part); }
     const char* name(id part);
+    const char* display_name(id part);
     bool is_version(std::string_view version);
 
     struct file

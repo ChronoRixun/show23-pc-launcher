@@ -109,7 +109,7 @@ namespace launcher_update
 
         std::string zip_name(const std::string& version)
         {
-            return "show23-pc-" + version + "-win64-portable.zip";
+            return "show23-pc-" + version + files::archive_suffix + ".zip";
         }
 
         std::optional<release> fetch_release(channel selected, std::string& error, bool& from_cache)

@@ -8,7 +8,7 @@
 
 namespace show23
 {
-    enum class play_phase { idle, checking, certificates, server, playing, stopping };
+    enum class play_phase { idle, checking, preparing, certificates, server, playing, stopping };
 
     struct play_result
     {
@@ -23,7 +23,7 @@ namespace show23
         fs::path base;
         fs::path python;
         fs::path server;
-        fs::path emulator;
+        fs::path engine;
         bool fullscreen{};
         std::string player_name;
         resolution display_resolution = default_resolution;
@@ -35,7 +35,6 @@ namespace show23
         std::chrono::milliseconds ready_timeout{std::chrono::seconds(60)};
         std::function<bool()> stop;
         std::function<void(play_phase)> phase;
-        std::function<void(const char*)> warning;
     };
 
     bool local_server_ports_available();

@@ -56,7 +56,7 @@ namespace parts
         bool valid_path(std::string_view path)
         {
             if (path.empty() || path.size() > 200 || path.front() == '/' || path.back() == '/' ||
-                path.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-/") != path.npos) return false;
+                path.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-+/") != path.npos) return false;
             while (!path.empty())
             {
                 const auto slash = path.find('/');
@@ -78,6 +78,11 @@ namespace parts
     {
         constexpr std::array names{"launcher", "emulator", "server", "profile"};
         return names[index(part)];
+    }
+
+    const char* display_name(const id part)
+    {
+        return std::array{"Launcher", "Game engine", "Local server", "Profile"}[index(part)];
     }
 
     bool is_version(const std::string_view version)
@@ -172,7 +177,7 @@ namespace parts
                 const auto version = other == id::launcher ? launcher_version :
                     (item ? std::string_view(item->version) : std::string_view{});
                 if (!release_channel::satisfies(version, rule))
-                    return std::format("{} {} requires {} {} ({}).", name(part->part), part->version, name(other),
+                    return std::format("{} {} requires {} {} ({}).", display_name(part->part), part->version, display_name(other),
                                        rule, version.empty() ? "not installed" : version);
             }
         }

@@ -1,7 +1,6 @@
 #include "std_include.hpp"
 #include <WinSock2.h>
 #include "play_session.hpp"
-#include "player_name.hpp"
 #include "child_process.hpp"
 #include "card_import.hpp"
 
@@ -12,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <format>
+#include <regex>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -137,6 +137,17 @@ namespace show23
         {
             return file.present && !file.directory && file.error == path_error::none;
         }
+
+        bool seed_config(const fs::path& package, const location& profile, const fs::path& name)
+        {
+            const auto current = inspect(profile.path / name, true);
+            if (current.error != path_error::none || current.directory) return false;
+            if (current.present) return current.length != 0;
+            const auto source = inspect(package / name, false, true);
+            if (!plain_file(source) || !source.length || source.length > 1024 * 1024) return false;
+            std::string bytes(static_cast<std::size_t>(source.length), '\0');
+            return read_at(source.pins.back().get(), 0, bytes) && atomically_write(profile, name, bytes);
+        }
     }
 
     bool local_server_ports_available()
@@ -147,7 +158,7 @@ namespace show23
 
     const char* phase_name(play_phase phase)
     {
-        return std::array{"idle", "checking", "certificates", "server", "playing", "stopping"}[static_cast<std::size_t>(phase)];
+        return std::array{"idle", "checking", "preparing", "certificates", "server", "playing", "stopping"}[static_cast<std::size_t>(phase)];
     }
 
     play_result run_play(const play_request& request, const play_options& options)
@@ -159,12 +170,13 @@ namespace show23
         const auto profile = inspect(request.install / "data/profiles/default");
         const auto server_data = inspect(request.install / "data/profiles/default/server");
         const auto logs = inspect(request.install / "data/logs");
-        const auto exe = inspect(request.emulator, false, true);
+        const auto exe = inspect(request.engine / "bb-probe.exe", false, true);
+        const auto preparer = inspect(request.engine / "prepare.py", false, true);
         const auto python = inspect(request.python, false, true);
         const auto script = inspect(request.server, false, true);
-        const auto boot = inspect(request.base / "eboot.bin", false, true);
+        const auto source = inspect(request.base / "eboot.bin", false, true);
         if (!profile.directory || !server_data.directory || !logs.directory ||
-            !plain_file(exe) || !plain_file(python) || !plain_file(script) || !plain_file(boot))
+            !plain_file(exe) || !plain_file(preparer) || !plain_file(python) || !plain_file(script) || !plain_file(source))
             return {"paths"};
 
         const winsock network;
@@ -173,19 +185,51 @@ namespace show23
             if (!available(port)) return {"port", port};
         if (stopped()) return {"stopped"};
 
-        try
-        {
-            const auto applied = write_resolution(profile.path, request.display_resolution);
-            if (applied == resolution_result::malformed) return {"resolutionMalformed"};
-            if (applied != resolution_result::updated) return {"resolutionUnavailable"};
-        }
-        catch (...) { return {"resolutionUnavailable"}; }
-
         SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
         const handle input(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                       &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
         if (!input) return {"logs"};
         const auto suffix = log_suffix();
+        const auto package = exe.path.parent_path();
+        const auto engine_profile = ensure_directory(profile.path / "engine");
+        if (engine_profile.error != path_error::none || !engine_profile.directory ||
+            !seed_config(package, engine_profile, "bbport.ini") || !seed_config(package, engine_profile, "input.ini"))
+            return {"engineProfile"};
+        const auto user = ensure_directory(engine_profile.path / "user");
+        if (user.error != path_error::none || !user.directory) return {"engineProfile"};
+
+        phase(play_phase::preparing);
+        if (stopped()) return {"stopped"};
+        const auto prepare_log = logs.path / ("prepare-" + suffix);
+        auto result_path = prepare_log;
+        result_path.replace_extension(".txt");
+        child_process preparation;
+        {
+            const auto output = open_log(prepare_log, inherit);
+            const std::array args{std::wstring(L"-B"), std::wstring(L"-X"), std::wstring(L"utf8"),
+                std::wstring(L"-u"), preparer.path.native(), request.install.native(),
+                std::wstring(L"--launcher-result"), result_path.native()};
+            if (!output || !preparation.start(python.path, package, args, input.get(), output.get(), true))
+                return {"prepareLaunch"};
+        }
+        while (preparation.running() && !stopped()) Sleep(30);
+        const auto preparation_code = preparation.exit_code();
+        preparation.stop();
+        if (stopped()) return {"stopped"};
+        if (!preparation_code || *preparation_code) return {"prepareExit", preparation_code.value_or(0), tail(prepare_log)};
+        const auto result = inspect(result_path, false, true);
+        if (!plain_file(result) || !result.length || result.length > 128) return {"prepareOutput", 0, tail(prepare_log)};
+        std::string cache_key(static_cast<std::size_t>(result.length), '\0');
+        static const std::regex cache_name(R"(v[0-9]+-[0-9a-f]{64}-[0-9a-f]{16})");
+        if (!read_at(result.pins.back().get(), 0, cache_key) || !std::regex_match(cache_key, cache_name))
+            return {"prepareOutput", 0, tail(prepare_log)};
+        const auto cache = request.install / "data/engine-cache/CUSA35521" / cache_key;
+        const auto boot = inspect(cache / "boot-linked.bin", false, true);
+        const auto content = inspect(cache / "content.bin", false, true);
+        if (!plain_file(boot) || !boot.length || !plain_file(content) || !content.length)
+            return {"prepareOutput", 0, tail(prepare_log)};
+        if (stopped()) return {"stopped"};
+
         const auto run_server = [&](child_process& child, const wchar_t* mode, const fs::path& log)
         {
             const auto output = open_log(log, inherit);
@@ -248,41 +292,50 @@ namespace show23
         }
         if (stopped()) { server.stop(); return {"stopped"}; }
 
-        if (!request.player_name.empty())
+        const auto engine_log = logs.path / ("engine-" + suffix);
+        const std::array args{boot.path.native(), std::wstring(L"--content-profile"), content.path.native(),
+            std::wstring(L"--app0"), source.path.parent_path().native(), std::wstring(L"--user"), user.path.native(),
+            std::wstring(L"--timeout"), std::wstring(L"0"), std::wstring(L"--show23-local-ca"), certificate.path.native()};
+        const environment_entry environment[] = {
+            {L"BB_CONFIG", (engine_profile.path / "bbport.ini").native()},
+            {L"BB_INPUT_CONFIG", (engine_profile.path / "input.ini").native()},
+            {L"BB_GPU_USER_DIR", user.path.native()},
+            {L"BB_VBLANK_HZ", L"0"},
+            {L"BB_FPS_LIMIT", L"120"},
+            {L"BB_PRESENT_MODE", L"Mailbox"},
+            {L"BB_READBACK_SMALL_BUFFERS", L"1"},
+            {L"BB_READBACK_SMALL_GATE", L"1"},
+            {L"BB_READBACK_SMALL_MAX", L"4096"},
+            {L"BB_READBACK_TARGETS", L"256x512"},
+            {L"BB_UPNP", L"0"},
+            {L"BB_LOG_BUFFER", L"1"},
+            {L"BB_WINDOW_SIZE", std::format(L"{}x{}", request.display_resolution.width, request.display_resolution.height)},
+            {L"BB_FULLSCREEN", request.fullscreen ? L"1" : L"0"},
+            {L"BB_USER_NAME", request.player_name.empty() ? L"Player" : utils::string::convert(request.player_name)},
+            {L"TEMP", logs.path.native()},
+            {L"TMP", logs.path.native()},
+        };
+        child_process engine;
         {
-            auto result = player_name_result::unavailable;
-            try { result = write_player_name(profile.path, request.player_name); }
-            catch (const std::exception&) {}
-            if (options.warning && result != player_name_result::updated)
-                options.warning(result == player_name_result::malformed ? "malformed" : "unavailable");
-        }
-        if (stopped()) { server.stop(); return {"stopped"}; }
-
-        const auto emulator_log = logs.path / ("emulator-" + suffix);
-        const std::array args{std::wstring(L"-g"), boot.path.native(), std::wstring(L"-i"), std::wstring(L"-f"),
-            std::wstring(request.fullscreen ? L"true" : L"false"), std::wstring(L"--show23-local-ca"), certificate.path.native()};
-        child_process emulator;
-        {
-            const auto output = open_log(emulator_log, inherit);
-            if (!output || !emulator.start(exe.path, profile.path, args, input.get(), output.get(), false))
+            const auto output = open_log(engine_log, inherit);
+            if (!output || !engine.start(exe.path, package, args, input.get(), output.get(), false, environment, L"BB_"))
             {
                 server.stop();
-                return {"emulatorLaunch"};
+                return {"engineLaunch"};
             }
         }
-        const auto began = clock::now();
         phase(play_phase::playing);
-        while (emulator.running() && server.running() && !stopped()) Sleep(50);
-        const auto emulator_running = emulator.running();
-        const auto code = emulator.exit_code();
+        while (engine.running() && server.running() && !stopped()) Sleep(50);
+        const auto engine_running = engine.running();
+        const auto code = engine.exit_code();
         const auto server_code = server.exit_code().value_or(0);
         phase(play_phase::stopping);
-        emulator.stop();
+        engine.stop();
         server.stop();
         if (stopped()) return {"stopped"};
-        if (emulator_running) return {"serverExit", server_code, tail(server_log)};
-        if (!code) return {"emulatorLaunch"};
+        if (engine_running && !code) return {"serverExit", server_code, tail(server_log)};
+        if (!code) return {"engineLaunch"};
         if (!*code) return {"finished"};
-        return {"emulatorExit", *code, clock::now() - began <= std::chrono::seconds(30) ? tail(emulator_log) : std::string{}};
+        return {"engineExit", *code, tail(engine_log)};
     }
 }

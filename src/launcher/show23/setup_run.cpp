@@ -149,7 +149,7 @@ namespace show23
 
         const char* publish_record(const fs::path& install, const game_record& game)
         {
-            for (const auto* relative : {"data/profiles/default/user", "data/profiles/default/server", "data/logs", "manifests"})
+            for (const auto* relative : {"data/profiles/default/server", "data/logs", "manifests"})
             {
                 const auto folder = ensure_directory(install / relative);
                 if (folder.error != path_error::none || !folder.directory) return "settings.tree";

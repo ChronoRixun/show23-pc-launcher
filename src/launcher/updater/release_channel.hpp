@@ -105,7 +105,7 @@ namespace release_channel
 
     // Beta's pick from a list: the highest version that is not a draft and has every asset in
     // `required` (a release still uploading its files isn't one yet; "{version}" in a name stands for
-    // the release's version: "show23-pc-{version}-win64-portable.zip"). Stable's: the same among
+    // the release's version: "show23-pc-{version}-win64-native-portable.zip"). Stable's: the same among
     // releases that are neither pre-releases by flag nor by version (releases/latest is what Stable
     // really uses; this is for a list a test or a cache holds).
     // Whether `value` has every file in `required` ("{version}" as for pick()).

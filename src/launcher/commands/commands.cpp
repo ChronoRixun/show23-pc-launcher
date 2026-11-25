@@ -8,6 +8,7 @@
 #include "show23/setup_run.hpp"
 #include "show23/play_session.hpp"
 #include "show23/card_import.hpp"
+#include "show23/input_paths.hpp"
 #include "show23/server_paths.hpp"
 #include "show23/player_name.hpp"
 #include "show23/shortcuts.hpp"
@@ -70,7 +71,6 @@ namespace commands
         std::atomic<show23::play_phase> play_status{show23::play_phase::idle};
         std::atomic_bool play_stop{};
         show23::play_result last_play;
-        const char* player_name_warning{};
         std::jthread play_worker;
 
         bool runtime_worker_busy{};
@@ -195,6 +195,11 @@ namespace commands
             return parts::stage_bundled_runtime(bundle_root(), install, launcher_update::running_version());
         }
 
+        parts::runtime_check inspect_play_runtime(const show23::fs::path& install)
+        {
+            return parts::inspect_bundled_runtime(bundle_root(), install, launcher_update::running_version());
+        }
+
         void verify_runtime_for(const show23::fs::path& install)
         {
             if (runtime_worker_busy || runtime_target == install) return;
@@ -206,7 +211,7 @@ namespace commands
                 runtime_worker = std::jthread([install]
                 {
                     parts::runtime_check checked;
-                    try { checked = parts::inspect_bundled_runtime(bundle_root(), install, launcher_update::running_version()); }
+                    try { checked = inspect_play_runtime(install); }
                     catch (...) { checked.message = "Could not verify the runtime files."; }
                     std::lock_guard lock(verify.mutex);
                     runtime_status = std::move(checked);
@@ -320,10 +325,8 @@ namespace commands
                     std::array<release_channel::outcome, 3> releases;
                     try
                     {
-                        const auto emulator = release_source::resolve(release_source::emulator_repo, channel,
-                                                                     {"emulator.json", "SHA256SUMS.txt"}, true);
                         const auto shared = release_source::resolve_shared_parts(channel);
-                        releases = {emulator, shared[0], shared[1]};
+                        releases = {release_channel::outcome{}, shared[0], shared[1]};
                     }
                     catch (const std::exception&)
                     {
@@ -524,6 +527,11 @@ namespace commands
                     if (index)
                     {
                         auto outcome = updates.releases[index - 1];
+                        if (part == parts::id::emulator)
+                        {
+                            outcome = {};
+                            outcome.unpublished = true;
+                        }
                         if (outcome.unpublished && (!runtime.error.empty() || !bundle.error.empty()))
                         {
                             outcome.unpublished = false;
@@ -567,6 +575,8 @@ namespace commands
                 response.AddMember("setUp", set_up, a);
                 response.AddMember("gameMissing", missing, a);
                 response.AddMember("installedCopy", game.record && game.record->installed, a);
+                response.AddMember("firstStart", set_up && !show23::input_paths::inspect(
+                    *install / "data/profiles/default/engine/user", true).present, a);
                 response.AddMember("sourcePath", json(utils::string::path_to_utf8(game.source_path), a), a);
                 response.AddMember("version", json(version, a), a);
                 response.AddMember("updated", updated, a);
@@ -675,7 +685,7 @@ namespace commands
                                 if (install)
                                 {
                                     prepare_runtime(*install);
-                                    checked = parts::inspect_bundled_runtime(bundle_root(), *install, launcher_update::running_version());
+                                    checked = inspect_play_runtime(*install);
                                 }
                             }
                             catch (...) { checked.message = "Could not verify the runtime files."; }
@@ -731,7 +741,6 @@ namespace commands
                 }
                 play_stop = false;
                 last_play = {};
-                player_name_warning = nullptr;
                 const auto name = show23::normalize_player_name(string(value, "playerName")).value_or(
                     show23::normalize_player_name(utils::properties::load(property_keys::PLAYER_NAME).value_or("")).value_or(""));
                 play_status = checking;
@@ -747,35 +756,41 @@ namespace commands
                             const auto game = install ? show23::inspect_game(*install) : show23::game_presence{};
                             if (install && game.state == show23::record_state::ready)
                             {
-                                verified = prepare_runtime(*install);
                                 outcome = {"runtime"};
-                                parts::runtime_lease lease(*install, false);
-                                if (!lease) outcome = {"runtimeInUse"};
-                                else if (verified)
+                                if (!prepare_runtime(*install))
                                 {
+                                    if (parts::runtime_in_use(*install)) outcome = {"runtimeInUse"};
+                                    else outcome.log = inspect_play_runtime(*install).message;
+                                }
+                                else
+                                {
+                                    parts::runtime_lease lease(*install, false);
+                                    if (!lease)
+                                    {
+                                        outcome = {"runtimeInUse"};
+                                        throw std::runtime_error("The runtime lease is unavailable.");
+                                    }
                                     const auto runtime = parts::read_runtime(*install);
                                     std::string details;
-                                    verified = parts::verify_runtime(runtime, launcher_update::running_version(), details);
-                                    if (!verified) throw std::runtime_error(details);
-                                    const auto server_folder = parts::component_folder(runtime, parts::id::server);
-                                    const auto server = show23::server_paths(server_folder);
-                                    const auto emulator_folder = parts::component_folder(runtime, parts::id::emulator);
-                                    const show23::play_request request{*install, game.record->base.path,
-                                        server.python, server.script,
-                                        emulator_folder / "shadPS4.exe", utils::properties::load(property_keys::FULLSCREEN) == "true", name,
-                                        saved_resolution()};
-                                    show23::play_options options;
-                                    options.stop = [] { return play_stop.load(); };
-                                    options.phase = [](auto phase)
+                                    verified = parts::verify_play_runtime(runtime, launcher_update::running_version(), details);
+                                    if (verified)
                                     {
-                                        if (!play_stop.load()) play_status = phase;
-                                    };
-                                    options.warning = [](const char* warning)
-                                    {
-                                        std::lock_guard lock(verify.mutex);
-                                        player_name_warning = warning;
-                                    };
-                                    outcome = show23::run_play(request, options);
+                                        const auto server_folder = parts::component_folder(runtime, parts::id::server);
+                                        const auto server = show23::server_paths(server_folder);
+                                        const auto engine = parts::component_folder(runtime, parts::id::emulator);
+                                        const show23::play_request request{*install, game.record->base.path,
+                                            server.python, server.script, engine,
+                                            utils::properties::load(property_keys::FULLSCREEN) == "true", name,
+                                            saved_resolution()};
+                                        show23::play_options options;
+                                        options.stop = [] { return play_stop.load(); };
+                                        options.phase = [](auto phase)
+                                        {
+                                            if (!play_stop.load()) play_status = phase;
+                                        };
+                                        outcome = show23::run_play(request, options);
+                                    }
+                                    else outcome.log = std::move(details);
                                 }
                             }
                         }
@@ -802,7 +817,6 @@ namespace commands
                 response.SetObject();
                 auto& a = response.GetAllocator();
                 response.AddMember("phase", rapidjson::StringRef(show23::phase_name(play_status.load())), a);
-                if (player_name_warning) response.AddMember("nameWarning", rapidjson::StringRef(player_name_warning), a);
                 if (last_play.message) response.AddMember("result", rapidjson::StringRef(last_play.message), a);
                 response.AddMember("code", last_play.number, a);
                 response.AddMember("log", json(last_play.log, a), a);

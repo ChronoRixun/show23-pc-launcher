@@ -152,7 +152,7 @@ namespace versions
         {
             if (component.empty() || component == "." || component == ".." ||
                 component.front() == ' ' || component.back() == ' ' || component.back() == '.' ||
-                component.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- .") != component.npos)
+                component.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+- .") != component.npos)
                 return false;
             auto base = lowercase(component.substr(0, component.find('.')));
             while (!base.empty() && base.back() == ' ') base.pop_back();

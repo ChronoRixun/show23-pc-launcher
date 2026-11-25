@@ -11,6 +11,8 @@ namespace versions { struct pointer; struct request; }
 
 namespace versioned_update_files
 {
+    inline constexpr auto archive_suffix = "-win64-native-portable";
+
     bool has_space(std::uint64_t available, std::uint64_t archive, std::uint64_t expanded);
     std::optional<std::string> verified_slot(const std::filesystem::path& root, std::string_view version);
     void cleanup(const std::filesystem::path& root);

@@ -55,6 +55,11 @@ namespace parts
     bool has_bundled_part(const installed_runtime& bundle, id part);
     bool verify_card_import_runtime(const installed_runtime& runtime, std::string_view launcher_version, std::string& message);
     bool verify_runtime(const installed_runtime& runtime, std::string_view launcher_version, std::string& message);
+    std::string play_layout_error(const installed_runtime& runtime);
+    bool verify_play_runtime(const installed_runtime& runtime, std::string_view launcher_version, std::string& message);
+    std::string server_state_error(const std::filesystem::path& install, std::string_view server_version);
+    // Caller holds the exclusive runtime lease while activating a staged runtime.
+    bool remember_server_state_version(const std::filesystem::path& install, std::string_view server_version);
 
     bool ready(const installed_runtime& runtime);
     bool runtime_ready(const installed_runtime& runtime);

@@ -73,6 +73,16 @@ test('show23: Ready comes from the native install state', async () => {
     assert.equal(view.id('play').disabled, false);
 });
 
+test('show23: a fresh profile explains the first launch and labels the game engine', async () => {
+    const view = open({
+        'get-show23': { ready: true, firstStart: true },
+        'get-parts': { parts: [{ part: 'emulator', version: '2.0.0' }] }
+    });
+    await view.clock.advance(0);
+    assert.match(view.id('game-source-notice').textContent, /first launch can take a few minutes/i);
+    assert.match(view.id('scorebug').querySelector('[data-part="emulator"]').textContent, /game engine/i);
+});
+
 test('show23: Settings shows four installed versions and the unpublished-release result', async () => {
     const view = open({
         'get-settings': { language: 'en', theme: 'default', offline: false, channel: 'stable' },
@@ -287,7 +297,7 @@ test('show23: Game set up with no runtime shows the saved version and secondary 
     await view.clock.advance(0);
     assert.equal(view.id('game-state').textContent, 'Game set up');
     assert.match(view.id('game-meta').textContent, /1\.21/);
-    assert.match(view.id('game-source-notice').textContent, /emulator and local server are not installed/i);
+    assert.match(view.id('game-source-notice').textContent, /game engine and local server are unavailable/i);
     assert.equal(view.id('setup-open-label').textContent, 'Set up again');
     assert.equal(view.id('setup-open').classList.contains('btn-secondary'), true);
     assert.equal(view.id('play').disabled, true);
@@ -409,6 +419,27 @@ test('package setup passes the keep decision back to the installer', async () =>
 });
 
 
+test('Play shows preparation and keeps Stop available before the game starts', async () => {
+    let preparing = false;
+    let stopped = false;
+    const view = open({
+        'get-show23': { ready: true, folder: 'Q:\\Fixture\\Destination' },
+        'play-show23': () => { preparing = true; return true; },
+        'stop-play': () => { stopped = true; return true; },
+        'get-play': () => stopped ? { phase: 'idle', result: 'stopped' } :
+            preparing ? { phase: 'preparing' } : { phase: 'idle' }
+    });
+    await view.clock.advance(0);
+    view.id('play').click();
+    await view.clock.advance(0);
+    assert.match(view.id('game-state').textContent, /preparing game files/i);
+    assert.equal(view.id('stop-play').hidden, false);
+    view.id('stop-play').click();
+    await view.clock.advance(250);
+    assert.equal(stopped, true);
+    assert.equal(view.id('stop-play').hidden, true);
+});
+
 test('Play shows Playing and Stop drives the session to a result', async () => {
     let played = false;
     let stopped = false;
@@ -423,7 +454,7 @@ test('Play shows Playing and Stop drives the session to a result', async () => {
     assert.match(view.id('game-source-notice').textContent, /1\.00/);
     view.id('play').click();
     await view.clock.advance(0);
-    assert.equal(view.id('game-state').textContent, 'Playing');
+    assert.match(view.id('game-state').textContent, /Playing.*first start/i);
     assert.equal(view.id('stop-play').hidden, false);
     view.id('stop-play').click();
     await view.clock.advance(300);
@@ -435,14 +466,14 @@ test('Play failure shows the diagnostic log in the result panel', async () => {
     const view = open({
         'get-show23': { ready: true },
         'play-show23': true,
-        'get-play': { phase: 'idle', result: 'emulatorExit', code: 12, log: 'Wrong executable' }
+        'get-play': { phase: 'idle', result: 'prepareExit', code: 19, log: 'Preparation failed' }
     });
     await view.clock.advance(0);
     view.id('play').click();
     await view.clock.advance(0);
     assert.equal(view.id('play-result').hidden, false);
-    assert.match(view.id('play-result-text').textContent, /12/);
-    assert.equal(view.id('play-result-log').textContent, 'Wrong executable');
+    assert.match(view.id('play-result-text').textContent, /preparation exited with code 19/i);
+    assert.equal(view.id('play-result-log').textContent, 'Preparation failed');
 });
 
 
@@ -524,23 +555,22 @@ test('Dismissing the name prompt saves the suggestion and starts Play', async ()
     }
 });
 
-test('The profile warning appears alongside Play status and the exit result', async () => {
+test('Play shows an engine failure and its log', async () => {
     let finished = false;
     const view = open({
         'get-show23': { ready: true },
         'play-show23': true,
-        'get-play': () => finished ? { phase: 'idle', result: 'finished', nameWarning: 'malformed' } :
-            { phase: 'playing', nameWarning: 'malformed' }
+        'get-play': () => finished ? { phase: 'idle', result: 'engineExit', code: 12, log: 'Runtime failed' } :
+            { phase: 'playing' }
     });
     await view.clock.advance(0);
     view.id('play').click();
     await view.clock.advance(0);
-    assert.match(view.id('player-name-warning').textContent, /malformed.*unchanged/);
-    assert.equal(view.id('game-state').textContent, 'Playing');
+    assert.match(view.id('game-state').textContent, /Playing.*first start/i);
     finished = true;
     await view.clock.advance(250);
-    assert.match(view.id('play-result-text').textContent, /exited/);
-    assert.equal(view.id('player-name-warning').hidden, false);
+    assert.match(view.id('play-result-text').textContent, /engine exited with code 12/);
+    assert.equal(view.id('play-result-log').textContent, 'Runtime failed');
 });
 
 
@@ -740,16 +770,16 @@ test('Resolution defaults to 1080p and saves either choice', async () => {
     assert.equal(choice.value, '1080p');
 });
 
-test('Play explains that a malformed config was left untouched', async () => {
+test('Play explains when preparation did not produce a usable cache', async () => {
     const view = open({
         'get-show23': { ready: true },
         'play-show23': true,
-        'get-play': { phase: 'idle', result: 'resolutionMalformed' }
+        'get-play': { phase: 'idle', result: 'prepareOutput' }
     });
     await view.clock.advance(0);
     view.id('play').click();
     await view.clock.advance(0);
-    assert.match(view.id('play-result-text').textContent, /config\.json.*unchanged.*Play/i);
+    assert.match(view.id('play-result-text').textContent, /usable cache/i);
 });
 
 

@@ -40,8 +40,10 @@ namespace parts
 
     bool runtime_ready(const installed_runtime& runtime)
     {
-        if (runtime.root.empty() || !runtime.error.empty() ||
+        if (!play_layout_error(runtime).empty() ||
             !compatibility_error(runtime.manifests, launcher_update::running_version()).empty()) return false;
+        if (!server_state_error(runtime.root.parent_path().parent_path(),
+                                runtime.manifests[index(id::server)]->version).empty()) return false;
         std::error_code ec;
         for (const auto part : all)
         {
@@ -53,7 +55,7 @@ namespace parts
     std::string verify_files(const installed_runtime& runtime)
     {
         std::string message;
-        verify_runtime(runtime, launcher_update::running_version(), message);
+        verify_play_runtime(runtime, launcher_update::running_version(), message);
         return message;
     }
 }

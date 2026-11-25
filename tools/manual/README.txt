@@ -1,35 +1,23 @@
-Manual mode (no launcher)
+Windows command-line play
 
-Extract the entire portable ZIP. Run these examples from the extracted folder,
-next to show23-pc.exe. Use your own unpacked game folders and choose a separate
-install folder. The 1.21 update is optional. Manual mode needs unpacked folders.
+Extract the entire native portable ZIP into a new folder. Use these commands
+from the extracted folder, next to show23-pc.exe. Choose a fresh install folder
+and use your own unpacked 1.00 game. The unpacked 1.21 update is optional.
 
-Windows
   manual\setup.cmd "C:\Games\Show23 install" "C:\Games\Show23 base" "C:\Games\Show23 update"
   manual\import-cards.cmd "C:\Games\Show23 install"
   manual\play.cmd "C:\Games\Show23 install" --fullscreen --resolution 720 --name "Player One"
 
-Linux
-  sh manual/setup.sh "$HOME/show23-install" "$HOME/show23-base" "$HOME/show23-update"
-  sh manual/import-cards.sh "$HOME/show23-install"
-  sh manual/play.sh "$HOME/show23-install" "$HOME/bin/shadPS4" --fullscreen --resolution 720 --name "Player One"
+The import-cards command is optional. Omit --fullscreen for windowed play.
+Use --resolution 720 or --resolution 1080 to set the initial window size.
+Fullscreen uses the desktop dimensions. The local name defaults to Player.
+Names take 3 to 16 letters, digits, spaces, hyphens or underscores. The local
+server uses its fixed Diamond Dynasty account.
 
-Use Python 3.10 or later on Linux and supply a Linux shadPS4 build from the
-show23-pc-emulator repository's release branch. The portable ZIP includes a
-Windows emulator only. Linux scripts use the recorded launcher version, or a
-complete version folder in a fresh ZIP. They do not require Wine and do not
-write the launcher's version record. Image conversion uses
-Pillow when available in the Linux Python environment.
+The first launch can take a few minutes. The game starts with fresh saves
+and shows the first-launch tutorial. The local server stops when the game
+exits or you press Ctrl+C. This release supports 64-bit Windows.
 
-The import-cards line is optional. Omit --fullscreen for windowed play.
-Play defaults to 1080p. Use --resolution 720 or --resolution 1080 to set both
-the internal and window resolution. Use --name "Player One" to set the
-primary local player's name. Names take 3 to 16 letters, digits, spaces,
-hyphens or underscores. Omitting --name preserves the current name.
-Add --no-update-art to use the base game's pictures and cached site pictures
-without using textures from the update. Play starts the server and stops it
-when the emulator exits or you press Ctrl+C.
-
-Saves are under data/profiles/default/user in the install folder. The server
-keeps card progress in data/profiles/default/server and writes logs under
-data/logs. On Windows you can later select this same install in the launcher.
+Saves and settings are under data/profiles/default/engine. The local server
+keeps progress and certificates under data/profiles/default/server. Session
+logs are under data/logs. You can select this native install in the launcher.

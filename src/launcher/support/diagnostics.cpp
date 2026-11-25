@@ -100,7 +100,7 @@ namespace support
         {
             if (part == parts::id::launcher) continue;
             const auto& item = runtime.manifests[parts::index(part)];
-            report += std::format("{}: {}\n", parts::name(part), item ? item->version : "not installed");
+            report += std::format("{}: {}\n", parts::display_name(part), item ? item->version : "not installed");
         }
         out.SetObject();
         auto& allocator = out.GetAllocator();

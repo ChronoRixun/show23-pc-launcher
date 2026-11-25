@@ -104,7 +104,7 @@ namespace release_source
 
     release_channel::outcome resolve(const std::string& repo, const channel value, const std::vector<std::string>& required, const bool force)
     {
-        auto outcome = shared().resolve(repo, value, required, force, utils::flags::has_flag("offline"), repo == emulator_repo);
+        auto outcome = shared().resolve(repo, value, required, force, utils::flags::has_flag("offline"));
         if (!outcome.chosen || outcome.from_cache)
         {
             utils::logger::write("release channel: {} ({}): {}{}", repo, release_channel::channel_name(value), outcome.error,

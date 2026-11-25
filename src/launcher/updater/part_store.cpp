@@ -10,6 +10,8 @@ namespace parts
     namespace fs = std::filesystem;
     namespace
     {
+        constexpr auto server_state_version_file = "server-state-version.txt";
+
         // Files and folders in the install layout must remain on the selected local drive.
         std::string read_small(const fs::path& path, const std::uintmax_t limit)
         {
@@ -28,6 +30,37 @@ namespace parts
                 input.length == expected.size && show23::input_paths::sha256(input) == expected.sha256;
         }
 
+        std::optional<std::string> server_state_version(const fs::path& install)
+        {
+            using namespace show23::input_paths;
+            const auto path = install / "manifests" / server_state_version_file;
+            const auto entry = inspect(path, true);
+            if (entry.error != path_error::none || entry.directory || entry.links > 1) return std::nullopt;
+            if (!entry.present) return std::string{};
+            auto version = read_small(path, 128);
+            while (!version.empty() && (version.back() == '\r' || version.back() == '\n')) version.pop_back();
+            if (!is_version(version)) return std::nullopt;
+            return version;
+        }
+    }
+
+    std::string server_state_error(const fs::path& install, std::string_view server_version)
+    {
+        const auto saved = server_state_version(install);
+        if (!saved || !is_version(server_version)) return "The local server state version could not be verified.";
+        if (!saved->empty() && release_channel::compare(server_version, *saved) < 0)
+            return "This install is reserved for a newer local server. Choose a fresh install folder.";
+        return {};
+    }
+
+    bool remember_server_state_version(const fs::path& install, std::string_view server_version)
+    {
+        using namespace show23::input_paths;
+        const auto saved = server_state_version(install);
+        if (!saved || !is_version(server_version)) return false;
+        if (!saved->empty() && release_channel::compare(server_version, *saved) < 0) return false;
+        if (*saved == server_version) return true;
+        return atomically_write(inspect(install / "manifests"), server_state_version_file, std::string(server_version) + '\n');
     }
 
     bool ordinary_path(const fs::path& path, const bool allow_missing)
@@ -109,7 +142,10 @@ namespace parts
     bool verify_card_import_runtime(const installed_runtime& runtime, const std::string_view launcher_version, std::string& message)
     {
         if (!verify_runtime(runtime, launcher_version, message)) return false;
-        const auto& files = runtime.manifests[index(id::server)]->files;
+        const auto& server = *runtime.manifests[index(id::server)];
+        message = server_state_error(runtime.root.parent_path().parent_path(), server.version);
+        if (!message.empty()) return false;
+        const auto& files = server.files;
         for (const auto* required : {"python/python.exe", "olserver.py"})
         {
             if (std::ranges::any_of(files, [&](const auto& file) { return file.path == required; })) continue;
@@ -139,7 +175,7 @@ namespace parts
             {
                 ++checked;
                 if (matches(folder / file.path, file)) continue;
-                if (first.empty()) first = std::string(name(part)) + "/" + file.path;
+                if (first.empty()) first = std::format("{} / {}", display_name(part), file.path);
                 ++failed;
             }
         }
@@ -148,4 +184,31 @@ namespace parts
         return !failed;
     }
 
+    std::string play_layout_error(const installed_runtime& runtime)
+    {
+        if (!runtime.error.empty()) return runtime.error;
+        if (runtime.root.empty()) return "No active runtime to verify.";
+        const auto listed = [&](id part, std::string_view path)
+        {
+            const auto& manifest = runtime.manifests[index(part)];
+            return manifest && std::ranges::any_of(manifest->files, [&](const auto& file)
+            {
+                return file.path == path && file.size != 0;
+            });
+        };
+        for (const auto* path : {"bb-probe.exe", "MANIFEST.tsv", "bbport.ini", "input.ini", "prepare.py",
+                                "prep/prepare.py", "prep/link_modules.py", "prep/link_libc.py", "prep/content_profile.py"})
+            if (!listed(id::emulator, path)) return std::format("The game engine manifest does not cover {}.", path);
+        for (const auto* path : {"python/python.exe", "olserver.py"})
+            if (!listed(id::server, path)) return std::format("The server manifest does not cover {}.", path);
+        return {};
+    }
+
+    bool verify_play_runtime(const installed_runtime& runtime, const std::string_view launcher_version, std::string& message)
+    {
+        message = play_layout_error(runtime);
+        if (message.empty())
+            message = server_state_error(runtime.root.parent_path().parent_path(), runtime.manifests[index(id::server)]->version);
+        return message.empty() && verify_runtime(runtime, launcher_version, message);
+    }
 }

@@ -4,15 +4,10 @@ if "%~1"=="" (
     echo Usage: import-cards.cmd ^<install^> 1>&2
     exit /b 2
 )
-set "bundle=%~dp0.."
-set "version="
-if exist "%bundle%\manifests\runtime.txt" set /p "version="<"%bundle%\manifests\runtime.txt"
-if not defined version goto missing
-set "server=%bundle%\runtime\%version%\server"
-if not exist "%server%\python\python.exe" goto missing
-"%server%\python\python.exe" -B "%server%\olserver.py" import-cards --install %* --pictures
+if not exist "%~dp0..\show23-pc-launcher.exe" goto missing
+"%~dp0..\show23-pc-launcher.exe" --manual-import %*
 exit /b %errorlevel%
 
 :missing
-echo Bundled server missing. Extract the entire release ZIP. 1>&2
+echo Bundled runtime missing. Extract the entire release ZIP. 1>&2
 exit /b 1

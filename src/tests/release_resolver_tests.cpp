@@ -5,6 +5,21 @@
 
 #include <map>
 
+TEST(release_assets_for_the_native_runtime_are_ineligible_for_old_updaters)
+{
+    // The two asset names are a compatibility boundary for the sealed inventory.
+    const auto native = R"([{"tag_name":"v2.0.0","draft":false,"prerelease":false,"assets":[
+        {"name":"show23-pc-2.0.0-win64-native-portable.zip","size":10,"browser_download_url":"https://github.com/test/repo/releases/download/v2.0.0/show23-pc-2.0.0-win64-native-portable.zip"},
+        {"name":"launcher.json","size":10,"browser_download_url":"https://github.com/test/repo/releases/download/v2.0.0/launcher.json"},
+        {"name":"SHA256SUMS.txt","size":10,"browser_download_url":"https://github.com/test/repo/releases/download/v2.0.0/SHA256SUMS.txt"}]}])";
+    using release_channel::channel;
+    const release_resolver::http_answer reply{true, {}, 200, native};
+    CHECK(!release_resolver::select_from_feed(reply, channel::stable,
+        {"show23-pc-{version}-win64-portable.zip", "launcher.json", "SHA256SUMS.txt"}).chosen);
+    CHECK(release_resolver::select_from_feed(reply, channel::stable,
+        {"show23-pc-{version}-win64-native-portable.zip", "launcher.json", "SHA256SUMS.txt"}).chosen.has_value());
+}
+
 // Release discovery and channel-specific fallback against an in-memory GitHub feed.
 namespace
 {
@@ -83,6 +98,7 @@ namespace
             this->clock += std::chrono::minutes(11); // past the answers' reuse
         }
     };
+
 
 }
 

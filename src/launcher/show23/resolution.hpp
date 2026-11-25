@@ -17,6 +17,4 @@ namespace show23
     inline constexpr auto default_resolution = resolutions[1];
 
     const resolution* find_resolution(std::string_view id);
-    enum class resolution_result { updated, malformed, unavailable };
-    resolution_result write_resolution(const fs::path& profile, resolution choice);
 }

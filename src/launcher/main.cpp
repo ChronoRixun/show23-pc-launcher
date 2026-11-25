@@ -5,6 +5,8 @@
 #include "updater/launcher_update.hpp"
 #include "versioned_start.hpp"
 #include "show23/child_process.hpp"
+#include "show23/card_import.hpp"
+#include "show23/play_session.hpp"
 #include "show23/server_paths.hpp"
 #include "updater/part_store.hpp"
 #include "updater/release_source.hpp"
@@ -162,7 +164,9 @@ namespace
         launcher_update::stop();
     }
 
-    int manual_play()
+    enum class manual_action { setup, play, import_cards };
+
+    int run_manual(manual_action action)
     {
         AttachConsole(ATTACH_PARENT_PROCESS);
         const auto error = [](std::string_view message)
@@ -173,24 +177,15 @@ namespace
             return 1;
         };
         const auto& layout = versioned_start::layout();
-        if (!layout) return error("Extract the entire launcher ZIP before using manual Play.");
+        if (!layout) return error("Extract the entire launcher ZIP before using the manual commands.");
         int count{};
         const auto args = CommandLineToArgvW(GetCommandLineW(), &count);
         if (!args) return 1;
         const auto release = utils::finally([&] { LocalFree(args); });
-        if (count < 3 || !*args[2]) return error("Choose an install folder for manual Play.");
+        if (count < 3 || !*args[2]) return error("Choose an install folder.");
         const auto install = std::filesystem::absolute(args[2]).lexically_normal();
-        const parts::runtime_lease lease(install, false);
-        if (!lease) return error("The game runtime is in use or its lock cannot be opened.");
-
-        const auto runtime = parts::read_runtime(layout.release);
-        std::string details;
-        if (!parts::verify_runtime(runtime, launcher_update::running_version(), details)) return error(details);
-        const auto server = show23::server_paths(parts::component_folder(runtime, parts::id::server));
-        const auto emulator = parts::component_folder(runtime, parts::id::emulator) / "shadPS4.exe";
-        std::vector<std::wstring> command{L"-B", server.script.native(), L"play", L"--install", install.native()};
-        for (int i = 3; i < count; ++i) command.emplace_back(args[i]);
-        command.insert(command.end(), {L"--emulator", emulator.native()});
+        if (!show23::is_local_path(install)) return error("Choose a local install folder.");
+        const auto version = launcher_update::running_version();
 
         const auto duplicate = [](DWORD stream)
         {
@@ -200,18 +195,76 @@ namespace
             return show23::input_paths::handle(result);
         };
         const auto input = duplicate(STD_INPUT_HANDLE), output = duplicate(STD_OUTPUT_HANDLE);
-        show23::child_process child;
         bool hidden = false;
 #ifdef SHOW23_UPDATE_FIXTURE
         hidden = !utils::http::fixture_origin().empty() &&
             versions::plain_path(layout.versions.parent_path() / "fixture-mode");
 #endif
-        if (!input || !output || !child.start(server.python, server.script.parent_path(), command, input.get(), output.get(), hidden))
-            return error("Could not start manual Play.");
-        while (child.running()) Sleep(100);
-        const auto code = child.exit_code().value_or(1);
-        // Stop and wait for any remaining descendants before the lease is released.
-        return child.stop() ? static_cast<int>(code) : 1;
+        const auto launch = [&](const parts::installed_runtime& runtime, const std::vector<std::wstring>& arguments)
+        {
+            const auto server = show23::server_paths(parts::component_folder(runtime, parts::id::server));
+            show23::child_process child;
+            if (!input || !output || !child.start(server.python, server.script.parent_path(), arguments,
+                                                   input.get(), output.get(), hidden))
+                return error("Could not start the manual command.");
+            while (child.running()) Sleep(100);
+            const auto code = child.exit_code().value_or(1);
+            return child.stop() ? static_cast<int>(code) : 1;
+        };
+        const auto manual_script = [](const parts::installed_runtime& runtime)
+        {
+            const auto& files = runtime.manifests[parts::index(parts::id::server)]->files;
+            return std::ranges::any_of(files, [](const auto& file) { return file.path == "manual_mode.py"; }) ?
+                parts::component_folder(runtime, parts::id::server) / "manual_mode.py" : std::filesystem::path{};
+        };
+        if (action == manual_action::setup)
+        {
+            if (count < 4 || count > 5) return error("Choose an unpacked base folder and an optional update folder.");
+            const auto bundle = parts::read_runtime(layout.release);
+            std::string details;
+            if (!parts::verify_play_runtime(bundle, version, details)) return error(details);
+            const auto script = manual_script(bundle);
+            if (script.empty()) return error("The bundle is missing its manual setup script.");
+            std::vector<std::wstring> command{L"-B", L"-X", L"utf8", L"-u", script.native(),
+                                              L"setup", install.native(), L"--base", args[3]};
+            if (count == 5) command.insert(command.end(), {L"--update", args[4]});
+            {
+                const parts::runtime_lease lease(install, true);
+                if (!lease) return error("The game runtime is in use or its lock cannot be opened.");
+                const auto status = parts::inspect_bundled_runtime(layout.release, install, version);
+                if (!status.fresh) return error("Choose a fresh install folder for manual setup.");
+                if (const auto code = launch(bundle, command); code) return code;
+            }
+            if (!parts::stage_bundled_runtime(layout.release, install, version))
+                return error("The game folders were recorded, but the bundled runtime could not be installed.");
+            return 0;
+        }
+
+        const auto game_record = show23::input_paths::inspect(install / "data/games/CUSA35521/game.json");
+        if (!game_record.present || game_record.directory || game_record.error != show23::input_paths::path_error::none)
+            return error("Run setup for this install folder first.");
+        if (!parts::stage_bundled_runtime(layout.release, install, version))
+            return error(parts::inspect_bundled_runtime(layout.release, install, version).message);
+        const parts::runtime_lease lease(install, false);
+        if (!lease) return error("The game runtime is in use or its lock cannot be opened.");
+        const auto runtime = parts::read_runtime(install);
+        std::string details;
+        if (!parts::verify_play_runtime(runtime, version, details)) return error(details);
+        const show23::activity_lock activity;
+        if (!activity) return error("Close the active game session or card import before continuing.");
+        if (action == manual_action::import_cards)
+        {
+            if (count != 3) return error("Give one install folder for card import.");
+            if (!show23::local_server_ports_available()) return error("The local server is already running or its ports are unavailable.");
+            const auto server = show23::server_paths(parts::component_folder(runtime, parts::id::server));
+            return launch(runtime, {L"-B", L"-X", L"utf8", L"-u", server.script.native(), L"import-cards",
+                                    L"--install", install.native(), L"--pictures"});
+        }
+        const auto script = manual_script(runtime);
+        if (script.empty()) return error("The active runtime is missing its manual play script.");
+        std::vector<std::wstring> command{L"-B", L"-X", L"utf8", L"-u", script.native(), L"play", install.native()};
+        for (int i = 3; i < count; ++i) command.emplace_back(args[i]);
+        return launch(runtime, command);
     }
 
 #ifdef SHOW23_UPDATE_FIXTURE
@@ -379,7 +432,9 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         const auto versioned = static_cast<bool>(versioned_start::layout());
         if (!versioned && _wcsicmp(executable.filename().c_str(), L"show23-pc-launcher.exe") == 0)
             throw std::runtime_error("Extract the entire release ZIP, then start show23-pc.exe from its top folder.");
-        if (utils::flags::has_flag("-manual-play")) return manual_play();
+        if (utils::flags::has_flag("-manual-play")) return run_manual(manual_action::play);
+        if (utils::flags::has_flag("-manual-setup")) return run_manual(manual_action::setup);
+        if (utils::flags::has_flag("-manual-import")) return run_manual(manual_action::import_cards);
         if (is_subprocess())
         {
             set_working_directory();

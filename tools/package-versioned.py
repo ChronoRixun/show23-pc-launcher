@@ -1,10 +1,10 @@
-"""Build the versioned portable archive from a Release build and the frozen runtime."""
+"""Build the versioned portable archive from local build, engine and server files."""
 import argparse
+import csv
 import hashlib
 import json
 import re
 import shutil
-import stat
 import sys
 from contextlib import contextmanager
 from uuid import uuid4
@@ -12,7 +12,6 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZipFile
 
 REPO = Path(__file__).resolve().parents[1]
-LEGACY = "0.1.2"
 FIRST_VERSIONED = (0, 1, 3)
 EXE = "show23-pc-launcher.exe"
 MARKERS = ("SHOW23_FIXTURE_PORT", "SHOW23_UPDATE_FIXTURE", "show23-pc-update-fixture-",
@@ -42,7 +41,7 @@ def safe_path(name):
     if not name or len(name) > 240:
         return False
     for item in name.split("/"):
-        if not re.fullmatch(r"[a-zA-Z0-9_. -]+", item) or item in {".", ".."} or item[0] == " " or item[-1] in " .":
+        if not re.fullmatch(r"[a-zA-Z0-9_.+ -]+", item) or item in {".", ".."} or item[0] == " " or item[-1] in " .":
             return False
         stem = item.split(".", 1)[0].rstrip().lower()
         if re.fullmatch(r"con|prn|aux|nul|com\d|lpt\d", stem):
@@ -51,6 +50,9 @@ def safe_path(name):
 
 
 def tree(folder):
+    attr = getattr(folder.lstat(), "st_file_attributes", 0)
+    if not folder.is_dir() or folder.is_symlink() or attr & 1024:
+        raise ValueError(f"Expected an ordinary directory: {folder}")
     result = {}
     folded = set()
     for path in sorted(folder.rglob("*")):
@@ -76,67 +78,120 @@ def verify_build(exe, release):
         raise ValueError(f"Rebuild {exe.name} with SHOW23_PACKAGE_VERSION={release}.")
 
 
-def read_receipt(path, archive_path):
-    receipt = json.loads(path.read_bytes())
-    files = receipt.get("files", [])
-    if (receipt.get("schema"), receipt.get("part"), receipt.get("version"), receipt.get("channel")) != (1, "launcher", LEGACY, "stable") or len(files) != 1:
-        raise ValueError("Supply the 0.1.2 launcher release manifest for the frozen runtime ZIP.")
-    asset = files[0]
-    if (asset.get("path") != f"show23-pc-{LEGACY}-win64-portable.zip" or
-            asset.get("size") != archive_path.stat().st_size or digest(archive_path) != asset.get("sha256")):
-        raise ValueError("The frozen runtime archive does not match the 0.1.2 release manifest.")
+ENGINE_REQUIRED = {
+    "bb-probe.exe", "bbport.ini", "input.ini", "LICENSE", "prepare.py", "prep/prepare.py",
+    "prep/link_modules.py", "prep/link_libc.py", "prep/content_profile.py",
+}
+SERVER_REQUIRED = {"olserver.py", "roster_decode.py", "card_import.py", "python/python.exe",
+                   "tables/ol-messages.csv"}
+# Development launch wrappers and build provenance are replaced by the portable entry points and notice.
+ENGINE_DEVELOPMENT_FILES = {"play.py", "play.ps1", "SOURCE.txt"}
 
 
-def copy_frozen(archive_path, release, licenses):
-    prefix = f"show23-pc-{LEGACY}-win64-portable/"
-    manifest_root = f"manifests/{LEGACY}/"
-    runtime_root = f"runtime/{LEGACY}/"
-    with ZipFile(archive_path) as archive:
-        seen = set()
-        for item in archive.infolist():
-            if item.is_dir():
-                continue
-            if item.filename.startswith(prefix + "LICENSES/"):
-                root, name = licenses, item.filename.removeprefix(prefix + "LICENSES/")
-            elif item.filename.startswith(prefix + "show23-pc/"):
-                root, name = release, item.filename.removeprefix(prefix + "show23-pc/")
-                if not name.startswith((manifest_root, runtime_root)) and name != "manifests/runtime.txt":
-                    continue
-            else:
-                continue
-            key = (root, name.lower())
-            if not safe_path(name) or key in seen or stat.S_ISLNK(item.external_attr >> 16):
-                raise ValueError(f"Unsafe frozen archive entry: {name}")
-            seen.add(key)
-            target = root / PurePosixPath(name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(item) as source, target.open("xb") as dest:
-                shutil.copyfileobj(source, dest)
+def copy_engine(package_root, target, notices):
+    files = tree(package_root)
+    inventory_path = files.pop("MANIFEST.tsv", None)
+    if inventory_path is None:
+        raise ValueError("The engine package needs MANIFEST.tsv.")
+    with inventory_path.open(encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream, delimiter="\t")
+        fields = {"file", "sha256", "msys2_package", "license"}
+        if not reader.fieldnames or not fields.issubset(reader.fieldnames) or len(reader.fieldnames) != len(set(reader.fieldnames)):
+            raise ValueError("Invalid engine inventory columns.")
+        verified = {}
+        for row in reader:
+            name, checksum = row["file"], row["sha256"]
+            if name in verified or name not in files or checksum != digest(files[name]):
+                raise ValueError(f"Invalid or damaged engine inventory entry: {name}")
+            verified[name] = (checksum, row["msys2_package"], row["license"])
+    if verified.keys() != files.keys() or not ENGINE_REQUIRED.issubset(files):
+        raise ValueError("The engine inventory must list the entire payload, including the executable, defaults and preparation scripts.")
+    output = []
+    for name, (checksum, dependency, license_name) in sorted(verified.items()):
+        if name in ENGINE_DEVELOPMENT_FILES:
+            continue
+        installed = target / name
+        copy_file(files[name], installed)
+        if digest(installed) != checksum:
+            raise ValueError(f"The engine file changed while it was being copied: {name}")
+        output.append((name, checksum, dependency or "", license_name or ""))
+    with (target / "MANIFEST.tsv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
+        writer.writerow(["file", "sha256", "dependency", "license"])
+        writer.writerows(output)
+    copy_file(target / "MANIFEST.tsv", notices / "DEPENDENCIES.tsv")
+    copy_file(files["LICENSE"], notices / "GPL-2.0.txt")
+    copy_file(REPO / "tools/engine-source.txt", notices / "SOURCE.txt")
+    if any(name.startswith("LICENSES/") for name in files):
+        copy_tree(target / "LICENSES", notices / "third-party")
 
-    if (release / "manifests/runtime.txt").read_text(encoding="ascii").strip() != LEGACY:
-        raise ValueError("The frozen runtime marker must name 0.1.2.")
-    manifests = tree(release / manifest_root)
-    if set(manifests) != {part + ".json" for part in PARTS}:
-        raise ValueError("The frozen runtime part manifest set does not match 0.1.2.")
-    files = tree(release / runtime_root)
-    expected = set()
+
+def copy_server(source, target, manual_mode):
+    files = tree(source)
+    roots = {"python", "vendor", "tables", "replies"}
+    for name, path in files.items():
+        if name not in SERVER_REQUIRED | {"manual_mode.py", "LICENSE", "LICENSE.txt"} and name.split("/")[0] not in roots:
+            raise ValueError(f"Unexpected file in the staged server: {name}")
+        if "__pycache__" in name.split("/") or path.suffix.lower() in {".pyc", ".key", ".pem", ".log"}:
+            raise ValueError(f"Unexpected generated or private server file: {name}")
+        copy_file(path, target / name)
+    if not SERVER_REQUIRED.issubset(files) or not any(name.startswith("replies/") for name in files):
+        raise ValueError("Supply a staged server with its embedded Python, tables and protocol replies.")
+    if manual_mode is not None:
+        copy_file(manual_mode, target / "manual_mode.py")
+    if not (target / "manual_mode.py").is_file():
+        raise ValueError("Supply the current standalone manual script with --manual-mode.")
+
+
+def copy_file(source, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+
+
+def stage_runtime(release, tag, engine, server, manual_mode=None, server_license=None):
+    version(tag)
+    channel = "beta" if "-beta." in tag else "stable"
+    runtime = release / "runtime" / tag
+    manifests = release / "manifests" / tag
+    manifests.mkdir(parents=True)
+    # The original part key and path are kept for existing manifests and release interfaces.
+    copy_engine(engine, runtime / PARTS["emulator"], release / "LICENSES/engine")
+    server_target = runtime / PARTS["server"]
+    copy_server(server, server_target, manual_mode)
+    if server_license is None:
+        server_license = next((server_target / name for name in ("LICENSE", "LICENSE.txt")
+                               if (server_target / name).is_file()), None)
+    if server_license is not None:
+        copy_file(server_license, release / "LICENSES/server.txt")
+    profile = runtime / PARTS["profile"]
+    profile.mkdir(parents=True)
+    (profile / "defaults.txt").write_bytes(b"The game creates its profile at first start.\n")
     for part, folder in PARTS.items():
-        manifest = json.loads(manifests[part + ".json"].read_bytes())
-        if (manifest.get("schema"), manifest.get("part"), manifest.get("version")) != (1, part, LEGACY) or not manifest.get("files"):
-            raise ValueError(f"Invalid frozen {part} manifest.")
-        for asset in manifest["files"]:
-            relative = asset["path"]
-            name = folder + "/" + relative
-            if not safe_path(relative) or name in expected or name not in files:
-                raise ValueError(f"Missing or duplicate frozen runtime file: {name}")
-            file = files[name]
-            if asset["size"] != file.stat().st_size or asset["sha256"] != digest(file):
-                raise ValueError(f"Frozen runtime differs from its manifest: {name}")
-            expected.add(name)
-    if expected != files.keys():
-        raise ValueError("The frozen runtime contains files missing from its manifests.")
-    if not (licenses / "emulator/SOURCE.txt").is_file():
-        raise ValueError("The frozen runtime is missing its emulator source notice.")
+        files = tree(runtime / folder)
+        if len(files) > 2048 or any(len(name) > 200 or " " in name for name in files):
+            raise ValueError(f"Invalid component inventory: {part}")
+        entries = [{"path": name, "size": path.stat().st_size, "sha256": digest(path)} for name, path in files.items()]
+        save_json(manifests / (part + ".json"), {
+            "schema": 1, "part": part, "version": tag, "channel": channel,
+            "min_launcher": tag, "files": entries, "compatibility": {
+                "launcher": ">=" + tag, **{other: "=" + tag for other in PARTS if other != part},
+            },
+        })
+        if (manifests / (part + ".json")).stat().st_size > 256 * 1024:
+            raise ValueError("Component inventory exceeds 256 KiB.")
+    (release / "manifests/runtime.txt").write_bytes((tag + "\n").encode("ascii"))
+
+
+def launcher_notices(release):
+    licenses = {
+        "launcher-GPL-3.0.txt": "LICENSE", "browser.txt": "deps/cef/LICENSE.txt",
+        "curl.txt": "deps/curl/COPYING", "rapidjson.txt": "deps/rapidjson/license.txt",
+        "miniz.txt": "deps/miniz/LICENSE", "libtomcrypt.txt": "deps/libtomcrypt/LICENSE",
+        "libtommath.txt": "deps/libtommath/LICENSE",
+        "OFL.txt": "src/launcher-ui/assets/fonts/OFL.txt",
+    }
+    for name, relative in licenses.items():
+        copy_file(REPO / relative, release / "LICENSES" / name)
 
 
 def inventory(release, tag, channel):
@@ -166,16 +221,14 @@ def save_json(path, data):
 SCRIPT_ENDINGS = {".cmd": b"\r\n", ".ps1": b"\r\n", ".sh": b"\n"}
 
 
-def copy_tree(source, target, normalize_scripts=False):
+def copy_tree(source, target):
     for name, file in tree(source).items():
-        dest = target / PurePosixPath(name)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        eol = SCRIPT_ENDINGS.get(file.suffix.lower()) if normalize_scripts else None
-        if eol:
-            lines = file.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            dest.write_bytes(lines.replace(b"\n", eol))
-        else:
-            shutil.copyfile(file, dest)
+        copy_file(file, target / name)
+
+
+def copy_script(source, target):
+    lines = source.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    target.write_bytes(lines.replace(b"\n", SCRIPT_ENDINGS[source.suffix.lower()]))
 
 
 def check_script_endings(payload):
@@ -204,7 +257,7 @@ def staging(out):
         shutil.rmtree(root)
 
 
-def package(tag, floor, frozen, receipt, out):
+def package(tag, floor, engine, server, out, manual_mode=None, server_license=None):
     if version(floor) > version(tag):
         raise ValueError("The first versioned tag cannot be newer than this release.")
     channel = "beta" if "-beta." in tag else "stable"
@@ -213,9 +266,8 @@ def package(tag, floor, frozen, receipt, out):
     bootstrap = bin_path / "show23-pc-bootstrap.exe"
     for exe in (launcher, bootstrap):
         verify_build(exe, tag)
-    read_receipt(receipt, frozen)
 
-    name = f"show23-pc-{tag}-win64-portable"
+    name = f"show23-pc-{tag}-win64-native-portable"
     out.mkdir(parents=True, exist_ok=True)
     with staging(out) as root:
         payload = root / name
@@ -234,17 +286,19 @@ def package(tag, floor, frozen, receipt, out):
                 raise ValueError(f"Release build asset missing: {required.name}")
         copy_tree(cef, release / "cef/release")
         copy_tree(ui, release / "ui")
-        licenses = payload / "LICENSES"
-        copy_frozen(frozen, release, licenses)
-        shutil.copyfile(REPO / "LICENSE", licenses / "launcher-GPL-3.0.txt")
-        copy_tree(licenses, release / "LICENSES")
-        source = (licenses / "emulator/SOURCE.txt").read_text(encoding="utf-8-sig").strip()
+        stage_runtime(release, tag, engine, server, manual_mode, server_license)
+        if not (release / "LICENSES/server.txt").is_file():
+            raise ValueError("Supply the staged server licence with --server-license.")
+        launcher_notices(release)
         readme = (REPO / "tools/player-readme.txt").read_text(encoding="utf-8")
-        player = readme.replace("@VERSION@", tag).replace("@EMULATOR_SOURCE@", source)
+        player = readme.replace("@VERSION@", tag)
         for folder in (payload, release):
             (folder / "README.txt").write_bytes(player.encode())
-        copy_tree(REPO / "tools/manual-forwarders", payload / "manual", normalize_scripts=True)
-        copy_tree(REPO / "tools/manual", release / "manual", normalize_scripts=True)
+        for folder, target in (("manual-forwarders", payload / "manual"), ("manual", release / "manual")):
+            target.mkdir()
+            for script in (REPO / "tools" / folder).iterdir():
+                if script.suffix.lower() in (".cmd", ".ps1"):
+                    copy_script(script, target / script.name)
         for folder in (payload, release):
             shutil.copyfile(REPO / "tools/manual/README.txt", folder / "manual/README.txt")
         save_json(release / "manifests/launcher.json", part_manifest(tag, channel, floor, launcher, EXE))
@@ -268,13 +322,27 @@ def package(tag, floor, frozen, receipt, out):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version")
-    parser.add_argument("min_launcher")
-    parser.add_argument("frozen_zip", type=Path)
-    parser.add_argument("frozen_manifest", type=Path)
-    parser.add_argument("out_dir", type=Path)
+    parser.add_argument("--version", default=(REPO / "tools/release-version.txt").read_text(encoding="ascii").strip())
+    parser.add_argument("--min-launcher")
+    parser.add_argument("--engine", type=Path, required=True)
+    parser.add_argument("--server", type=Path, required=True)
+    parser.add_argument("--manual-mode", type=Path)
+    parser.add_argument("--server-license", type=Path)
+    parser.add_argument("--out", type=Path, default=REPO / "dist")
+    parser.add_argument("--stage-only", action="store_true", help="Stage only the runtime into a new output folder")
     args = parser.parse_args()
     try:
-        package(args.version, args.min_launcher, args.frozen_zip, args.frozen_manifest, args.out_dir)
+        if args.stage_only:
+            if args.out.exists():
+                raise ValueError("Choose a new output folder for runtime staging.")
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            with staging(args.out.parent) as root:
+                bundle = root / "bundle"
+                stage_runtime(bundle, args.version, args.engine, args.server, args.manual_mode, args.server_license)
+                bundle.rename(args.out)
+            print(f"Staged runtime {args.version} in {args.out}")
+        else:
+            package(args.version, args.min_launcher or args.version, args.engine, args.server, args.out,
+                    args.manual_mode, args.server_license)
     except (OSError, ValueError, KeyError, TypeError) as error:
         sys.exit(str(error))

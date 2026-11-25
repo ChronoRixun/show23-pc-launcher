@@ -110,6 +110,7 @@ TEST(version_inventory_and_paths_are_unambiguous)
     const auto hash = sha256("abc");
     inventory value{"0.1.3-beta.1", "beta", 1, {{launcher_exe, hash, 3}}, {}};
     const auto parsed = parse_inventory(encode(value));
+    CHECK(safe_relative("runtime/1.0.0/emulator/libc++.dll"));
     CHECK(parsed && parsed->version == value.version && parsed->files == value.files);
     const auto body = encode(value);
     CHECK(!parse_inventory(body.substr(0, body.size() - 4)));

@@ -262,7 +262,7 @@ namespace versioned_update_files
         archive.opened = mz_zip_reader_init_cfile(&archive.zip, archive.file, archive_size, 0);
         if (!archive.opened) return "The launcher download is not a valid ZIP.";
 
-        const auto prefix = "show23-pc-" + version_ + "-win64-portable/show23-pc/versions/" + version_ + "/";
+        const auto prefix = "show23-pc-" + version_ + archive_suffix + "/show23-pc/versions/" + version_ + "/";
         std::vector<zip_entry> files;
         std::uint64_t expanded{};
         if (const auto failure = collect_entries(archive.zip, prefix, files, expanded); !failure.empty()) return failure;

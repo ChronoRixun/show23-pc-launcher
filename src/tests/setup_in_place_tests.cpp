@@ -183,7 +183,7 @@ TEST(setup_in_place_publishes_record_before_marker_and_can_be_repeated_without_t
     CHECK(remembered == 2);
     CHECK(!remove_game_copy(f.request.install));
     CHECK(inspect_game(f.request.install).state == record_state::ready);
-    CHECK(fs::is_directory(f.request.install / "data/profiles/default/user"));
+    CHECK(!fs::exists(f.request.install / "data/profiles/default/user"));
     CHECK(fs::is_directory(f.request.install / "data/profiles/default/server"));
     CHECK(fs::is_directory(f.request.install / "data/logs"));
     CHECK(snapshot(f.request.base) == base);

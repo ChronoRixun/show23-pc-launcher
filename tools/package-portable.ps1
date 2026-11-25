@@ -1,8 +1,10 @@
 param(
-    [Parameter(Mandatory)] [string] $Version,
-    [Parameter(Mandatory)] [string] $MinLauncher,
-    [Parameter(Mandatory)] [string] $FrozenRuntimeZip,
-    [Parameter(Mandatory)] [string] $FrozenRuntimeManifest,
+    [string] $Version,
+    [string] $MinLauncher,
+    [Parameter(Mandatory)] [string] $EnginePackage,
+    [Parameter(Mandatory)] [string] $ServerFolder,
+    [string] $ManualMode,
+    [string] $ServerLicense,
     [string] $OutDir = ''
 )
 

@@ -77,7 +77,7 @@ def release_files(version, exe):
 
 
 def asset_name(version):
-    return f"show23-pc-{version}-win64-portable"
+    return f"show23-pc-{version}-win64-native-portable"
 
 
 def make_asset(version, files):
@@ -110,8 +110,8 @@ class Matrix:
         self.__dict__.update(vars(options))
         self.root = self.work.resolve()
         scopes = [(PROBES / milestone).resolve() for milestone in ("m4", "m5", "m6", "m7")]
-        if not any(scope in self.root.parents for scope in scopes):
-            raise ValueError("Choose a new disposable test directory beneath probes/update-e2e/m4, m5, m6 or m7.")
+        if not any(scope in self.root.parents for scope in (*scopes, RESEARCH / "probes/engine-switch")):
+            raise ValueError("Choose a new disposable test directory under probes/engine-switch or an updater test milestone.")
         self.root.mkdir()
         self.results = []
 
@@ -420,7 +420,7 @@ def visible_start(ctx):
 
 
 def run(ctx):
-    ctx.record("E1", "Fresh extraction confirms a trial and stages the frozen runtime.", lambda: fresh(ctx))
+    ctx.record("E1", "Fresh extraction confirms a trial and stages the bundled runtime.", lambda: fresh(ctx))
     ctx.record("E2", "An in-app update confirms Beta 2, preserving earlier files and the installed runtime.",
                lambda: update(ctx))
     for cut, committed in (("U2-download", False), ("U2-downloaded", False), ("U3-extract", False),
@@ -443,7 +443,8 @@ def run(ctx):
                lambda: channel_roundtrip(ctx, False))
     ctx.record("E8-download", "Stable to Beta and back to Stable by explicit download after its slot is removed.",
                lambda: channel_roundtrip(ctx, True))
-    update_e2e_legacy.run(ctx)
+    if ctx.archived_legacy:
+        update_e2e_legacy.run(ctx)
     ctx.record("E12", "A held runtime lease allows update publication and blocks Restart until released.",
                lambda: update(ctx, "E12", action="lease-update"))
     ctx.record("E13", "Windows manual forwarding selects trial when fresh, then current during and after trial.",
@@ -461,6 +462,7 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=lambda path: Path(path).resolve(), required=True)
     parser.add_argument("--normal-zip", type=lambda path: Path(path).resolve())
     parser.add_argument("--capture-tool", type=lambda path: Path(path).resolve())
+    parser.add_argument("--archived-legacy", action="store_true", help="Run historical cases with archived 0.1.x inputs")
     parser.add_argument("--legacy-runtime-probe", type=lambda path: Path(path).resolve())
     parser.add_argument("--normal-runtime-probe", type=lambda path: Path(path).resolve())
     parser.add_argument("--cases", help="Comma-separated case IDs or case families.")

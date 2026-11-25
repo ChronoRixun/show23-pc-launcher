@@ -16,8 +16,8 @@ from zipfile import ZipFile
 
 
 LAUNCHER = "0.1.3-beta.1"
-RUNTIME = "0.1.2"
-MARKER = b"0.1.2\n"
+RUNTIME = (Path(__file__).with_name("release-version.txt")).read_text(encoding="ascii").strip()
+MARKER = (RUNTIME + "\n").encode("ascii")
 CRASH_EXIT = 111
 PARTS = {"emulator": "emulator", "server": "server", "profile": "tools/profile"}
 PROTECTED = {
@@ -91,7 +91,7 @@ def inventory(root):
 def python_files():
     archive = Path(__file__).resolve().parents[1] / "dist/show23-pc-0.1.2-win64-portable.zip"
     if archive.is_file():
-        prefix = f"{archive.stem}/show23-pc/runtime/{RUNTIME}/server/python/"
+        prefix = f"{archive.stem}/show23-pc/runtime/0.1.2/server/python/"
         runtime_file = re.compile(r"python(?:\.exe|3\.dll|3\d+\.(?:dll|zip|_pth))|vcruntime140(?:_1)?\.dll")
         files = {}
         with ZipFile(archive) as package:
@@ -116,9 +116,15 @@ def python_files():
 def runtime_files(play_python=None):
     files = {"manifests/runtime.txt": MARKER}
     payload = {
-        "emulator": {"shadPS4.exe": b"fixture emulator, deliberately not executable\n",
+        "emulator": {"bb-probe.exe": b"fixture engine, deliberately not executable\n",
+                     "MANIFEST.tsv": b"fixture inventory\n", "libc++.dll": b"fixture dependency\n",
+                     "bbport.ini": b"fixture config\n", "input.ini": b"fixture bindings\n",
+                     "prepare.py": b"# fixture preparer\n", "prep/prepare.py": b"# fixture\n",
+                     "prep/link_modules.py": b"# fixture\n", "prep/link_libc.py": b"# fixture\n",
+                     "prep/content_profile.py": b"# fixture\n",
                      "support.dll": b"fixture support DLL, deliberately not loadable\n"},
-        "server": {"olserver.py": PROCESS_SCRIPT if play_python else b"# frozen fixture\n",
+        "server": {"olserver.py": b"# server fixture\n",
+                   "manual_mode.py": PROCESS_SCRIPT if play_python else b"# manual fixture\n",
                    "roster_decode.py": b"# roster\n", "card_import.py": b"# cards\n",
                    "tables/ol-messages.csv": b"code,message\n", "replies/fixture.xml": b"<reply />\n"},
         "profile": {"defaults.txt": b"fixture default profile\n"},
@@ -128,7 +134,7 @@ def runtime_files(play_python=None):
         contents = payload[part]
         files.update({f"runtime/{RUNTIME}/{directory}/{name}": data for name, data in contents.items()})
         manifest = {
-            "schema": 1, "part": part, "version": RUNTIME, "channel": "stable", "min_launcher": RUNTIME,
+            "schema": 1, "part": part, "version": RUNTIME, "channel": "stable", "min_launcher": LAUNCHER,
             "files": [{"path": name, "size": len(data), "sha256": digest(data)}
                       for name, data in sorted(contents.items())],
             "compatibility": {other: "*" for other in ("launcher", *PARTS) if other != part},
@@ -183,6 +189,7 @@ class Fixture:
 
     def compare_live(self, extra_runtime=None, expected_manifests=None):
         assert self.marker.read_bytes() == MARKER
+        assert (self.marker.parent / "server-state-version.txt").read_bytes() == MARKER
         assert inventory(self.runtime_slot) == (inventory(self.slot / "runtime" / RUNTIME) | (extra_runtime or {}))
         assert inventory(self.manifest_slot) == (expected_manifests if expected_manifests is not None else
                                                   inventory(self.slot / "manifests" / RUNTIME))
@@ -190,7 +197,7 @@ class Fixture:
     def damage(self):
         assert self.action("stage")["ok"]
         self.compare_live()
-        (self.runtime_slot / "emulator/shadPS4.exe").write_bytes(b"damaged active emulator\n")
+        (self.runtime_slot / "emulator/bb-probe.exe").write_bytes(b"damaged active engine\n")
 
     def check_protected(self):
         assert all((self.install / name).read_bytes() == payload for name, payload in PROTECTED.items())
@@ -257,9 +264,9 @@ def repair_case(ctx, case_id, port, cut, repaired_count):
     assert f.runtime_slot.is_dir() and f.manifest_slot.is_dir()
     assert inventory(f.manifest_slot) == before_manifests
     assert not list((f.install / "runtime").glob(f".repair-{RUNTIME}-*"))
-    exe = "emulator/shadPS4.exe"
+    exe = "emulator/bb-probe.exe"
     expected_exe = ((f.slot / "runtime" / RUNTIME / exe).read_bytes() if repaired_count else
-                    b"damaged active emulator\n")
+                    b"damaged active engine\n")
     assert (f.runtime_slot / exe).read_bytes() == expected_exe
     assert missing.exists() is (repaired_count == 2)
 
@@ -292,9 +299,8 @@ def observe_manual(wrapper, state_dir):
 
 def manual_case(ctx, case_id, port):
     f = Fixture(ctx, case_id, port, python_files())
-    f.damage()
+    assert f.action("stage")["ok"]
     assert f.python.is_file()
-    original = inventory(f.install)
     state_dir = f.top / "manual state"
     state_dir.mkdir()
     manual_env = dict(f.env, SHOW23_FIXTURE_MANUAL_STATE=str(state_dir))
@@ -318,8 +324,7 @@ def manual_case(ctx, case_id, port):
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         try:
             stub = observe_manual(wrapper, state_dir)
-            expected_args = ["play", "--install", str(f.install), *named_args, "--emulator",
-                             str(f.slot / "runtime" / RUNTIME / "emulator/shadPS4.exe")]
+            expected_args = ["play", str(f.install), *named_args]
             assert stub["args"] == expected_args, stub
             for pid in (stub["pid"], stub["child"]):
                 handle = kernel.OpenProcess(synchronize, False, pid)
@@ -327,6 +332,8 @@ def manual_case(ctx, case_id, port):
                 children.append(handle)
                 assert kernel.WaitForSingleObject(handle, 0) == wait_timeout, pid
 
+            (f.runtime_slot / "emulator/bb-probe.exe").write_bytes(b"damaged after manual start\n")
+            original = inventory(f.install)
             refused = state_is(f.action("repair"), repairable=True, in_use=True)
             assert not refused["ok"] and refused["message"] == "in-use", refused
             assert inventory(f.install) == original
@@ -420,7 +427,7 @@ def locked_case(ctx, case_id, port, *, loaded_dll):
             state_is(f.action("inspect-runtime"), repairable=True)
             refused = state_is(f.action("repair"), repairable=True)
             assert not refused["ok"] and refused["message"] == "in-use", refused
-            exe = "emulator/shadPS4.exe"
+            exe = "emulator/bb-probe.exe"
             assert (f.runtime_slot / exe).read_bytes() == (f.slot / "runtime" / RUNTIME / exe).read_bytes()
             assert target.read_bytes() == damaged_bytes and not missing.exists()
             assert process.poll() is None
@@ -449,7 +456,7 @@ def legacy_partial_manifests(ctx, port):
     f.manifest_slot.rename(old_manifests)
 
     # The old repair moved the directories aside. A first file-level attempt
-    # restored just the emulator manifest before it stopped.
+    # restored just the engine manifest before it stopped.
     f.manifest_slot.mkdir()
     manifest = "emulator.json"
     shutil.copyfile(f.slot / "manifests" / RUNTIME / manifest, f.manifest_slot / manifest)
@@ -465,6 +472,20 @@ def legacy_partial_manifests(ctx, port):
     assert inventory(old_runtime) == original_runtime
     assert inventory(old_manifests) == original_manifests
     return {"completed": result, "originalBackupsPreserved": True}
+
+
+def newer_server_state(ctx, port):
+    f = Fixture(ctx, "E15o", port)
+    assert f.action("stage")["ok"]
+    write_files(f.install, {"manifests/server-state-version.txt": b"99.0.0\n",
+                            "data/profiles/default/server/state.json": b'{"state":"preserve"}\n'})
+    before = inventory(f.install)
+    state = state_is(f.action("inspect-runtime"))
+    assert "newer local server" in state["message"], state
+    for action in ("stage", "repair"):
+        assert not f.action(action)["ok"]
+    assert inventory(f.install) == before
+    return {"blocked": True, "stateUnchanged": True}
 
 
 def run(ctx):
@@ -503,3 +524,5 @@ def run(ctx):
                    lambda: locked_case(ctx, "E15m", port, loaded_dll=False))
         ctx.record("E15n", "File-level Repair completes a partially restored legacy manifest set",
                    lambda: legacy_partial_manifests(ctx, port))
+        ctx.record("E15o", "An older bundled server cannot open newer install state",
+                   lambda: newer_server_state(ctx, port))

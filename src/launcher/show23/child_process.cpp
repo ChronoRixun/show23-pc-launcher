@@ -3,13 +3,56 @@
 
 #include <array>
 #include <cstddef>
+#include <map>
 #include <utility>
+#include <utils/finally.hpp>
 
 namespace show23
 {
     namespace
     {
         using input_paths::handle;
+
+        struct environment_order
+        {
+            bool operator()(const std::wstring& a, const std::wstring& b) const
+            {
+                return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_LESS_THAN;
+            }
+        };
+
+        std::wstring process_environment(std::span<const environment_entry> overrides, std::wstring_view ignored_prefix)
+        {
+            const auto inherited = GetEnvironmentStringsW();
+            if (!inherited) return {};
+            const auto release = utils::finally([&] { FreeEnvironmentStringsW(inherited); });
+            std::map<std::wstring, std::wstring, environment_order> entries;
+            for (const wchar_t* current = inherited; *current;)
+            {
+                const std::wstring_view entry(current);
+                current += entry.size() + 1;
+                // A drive's current-directory entry has a leading '=' in its name.
+                const auto equals = entry.find(L'=', 1);
+                if (equals == entry.npos) continue;
+                const auto name = entry.substr(0, equals);
+                const auto count = static_cast<int>(ignored_prefix.size());
+                if (count && name.size() >= ignored_prefix.size() &&
+                    CompareStringOrdinal(name.data(), count, ignored_prefix.data(), count, TRUE) == CSTR_EQUAL)
+                    continue;
+                entries.emplace(name, entry.substr(equals + 1));
+            }
+            for (const auto& [name, value] : overrides) entries.insert_or_assign(name, value);
+            std::wstring block;
+            for (const auto& [name, value] : entries)
+            {
+                block += name + L'=' + value;
+                block += L'\0';
+            }
+            if (block.empty()) block += L'\0';
+            block += L'\0';
+            return block;
+        }
+
         bool stop_job(HANDLE job, HANDLE primary)
         {
             // Job accounting can reach zero before process objects become signaled
@@ -83,7 +126,8 @@ namespace show23
     }
 
     bool child_process::start(const fs::path& executable, const fs::path& directory,
-        const std::span<const std::wstring> arguments, HANDLE input, HANDLE output, bool console_hidden)
+        const std::span<const std::wstring> arguments, HANDLE input, HANDLE output, bool console_hidden,
+        std::span<const environment_entry> overrides, std::wstring_view ignored_prefix)
     {
         if (process_ || job_) return false;
         handle job(CreateJobObjectW(nullptr, nullptr));
@@ -106,9 +150,17 @@ namespace show23
             command += L' ';
             command += quote_process_argument(argument);
         }
+        std::wstring environment;
+        if (!overrides.empty() || !ignored_prefix.empty())
+        {
+            environment = process_environment(overrides, ignored_prefix);
+            if (environment.empty()) return false;
+        }
         PROCESS_INFORMATION process{};
-        const DWORD flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | (console_hidden ? CREATE_NO_WINDOW : 0);
-        if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE, flags, nullptr,
+        const DWORD flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT |
+            (console_hidden ? CREATE_NO_WINDOW : 0) | (environment.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT);
+        if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE, flags,
+            environment.empty() ? nullptr : environment.data(),
             directory.c_str(), &startup.StartupInfo, &process)) return false;
         handle child(process.hProcess), thread(process.hThread);
         if (!AssignProcessToJobObject(job.get(), child.get()) || ResumeThread(thread.get()) == DWORD(-1))

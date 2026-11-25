@@ -107,8 +107,8 @@ namespace parts
                 const auto& item = runtime.manifests[index(part)];
                 return item && std::ranges::any_of(item->files, [&](const auto& file) { return file.path == path; });
             };
-            return listed(id::emulator, "shadPS4.exe") && listed(id::server, "python/python.exe") &&
-                listed(id::server, "olserver.py") && listed(id::server, "roster_decode.py") &&
+            return play_layout_error(runtime).empty() &&
+                listed(id::server, "roster_decode.py") && listed(id::server, "manual_mode.py") &&
                 listed(id::server, "card_import.py") && listed(id::server, "tables/ol-messages.csv") &&
                 std::ranges::any_of(runtime.manifests[index(id::server)]->files, [](const auto& file)
                 {
@@ -288,6 +288,8 @@ namespace parts
                                  std::string_view launcher_version)
         {
             if (!marker_missing(install)) return {};
+            const auto state = inspect(install / "data/profiles/default/server/state.json", true);
+            if (state.present || state.error != path_error::none) return {};
             const auto slots = existing_slots(install, release);
             if (slots == fresh_state::invalid) return {};
             const auto target = install / "manifests" / release;
@@ -541,15 +543,17 @@ namespace parts
     {
         const auto active = read_runtime(install);
         std::string verification;
-        if (verify_runtime(active, launcher_version, verification)) return {true, false, false, {}};
+        if (verify_play_runtime(active, launcher_version, verification)) return {true, false, false, {}};
         const auto source = read_runtime(bundle);
         if (!separate_roots(bundle, install) || !frozen_source(source, launcher_version)) return {false, false, false, verification};
+        const auto server_version = source.manifests[index(id::server)]->version;
+        if (const auto error = server_state_error(install, server_version); !error.empty()) return {false, false, false, error};
         const auto release = source.root.filename().string();
         if (marker_missing(install))
         {
             if (inspect_fresh(bundle, install, release, launcher_version).state != fresh_state::invalid)
                 return {false, true, false, {}};
-            return {false, false, false, "The runtime marker is missing and the existing folders could not be verified as a fresh stage."};
+            return {false, false, false, "The bundled runtime needs a fresh install folder."};
         }
         const auto error = repair_error(install, source, active, release, launcher_version);
         return {false, false, error.empty() || error == "in-use", verification};
@@ -558,16 +562,19 @@ namespace parts
     bool stage_bundled_runtime(const fs::path& bundle, const fs::path& install, std::string_view launcher_version)
     {
         std::string verification;
-        if (verify_runtime(read_runtime(install), launcher_version, verification)) return true;
+        if (verify_play_runtime(read_runtime(install), launcher_version, verification)) return true;
         if (!marker_missing(install) || !separate_roots(bundle, install)) return false;
         const auto source = read_runtime(bundle);
         if (!frozen_source(source, launcher_version)) return false;
+        const auto server_version = source.manifests[index(id::server)]->version;
+        if (!server_state_error(install, server_version).empty()) return false;
         const auto release = source.root.filename().string();
         if (inspect_fresh(bundle, install, release, launcher_version).state == fresh_state::invalid) return false;
 
         const runtime_lease lease(install, true);
-        if (verify_runtime(read_runtime(install), launcher_version, verification)) return true;
+        if (verify_play_runtime(read_runtime(install), launcher_version, verification)) return true;
         if (!lease) return false;
+        if (!server_state_error(install, server_version).empty()) return false;
         const auto fresh = inspect_fresh(bundle, install, release, launcher_version);
         if (fresh.state == fresh_state::invalid) return false;
         const auto manifests = inspect(install / "manifests");
@@ -585,6 +592,7 @@ namespace parts
         {
             if (!marker_missing(install) ||
                 !exact_manifests(target.manifests, bundle / "manifests" / release) ||
+                !remember_server_state_version(install, server_version) ||
                 !atomically_write(manifests, "runtime.txt", release + '\n')) return false;
             clean_fresh_stages(runtime.path, release);
             return true;
@@ -617,16 +625,19 @@ namespace parts
         if (runtime_in_use(install)) return "in-use";
         const auto source = read_runtime(bundle);
         if (!frozen_source(source, launcher_version)) return "The bundled runtime failed verification.";
+        const auto server_version = source.manifests[index(id::server)]->version;
+        if (const auto error = server_state_error(install, server_version); !error.empty()) return error;
         const auto release = source.root.filename().string();
         // Validate eligibility without creating a lock file on an unrecognized install.
         if (const auto error = repair_error(install, source, read_runtime(install), release, launcher_version); !error.empty())
             return error;
         const runtime_lease lease(install, true);
         if (!lease) return lease.busy() ? "in-use" : "The runtime repair lease could not be opened.";
+        if (const auto error = server_state_error(install, server_version); !error.empty()) return error;
         const auto active = read_runtime(install);
         std::string verification;
         if (active.root.filename() == fs::path(release) && versions_match(active, source) &&
-            verify_runtime(active, launcher_version, verification)) return {};
+            verify_play_runtime(active, launcher_version, verification)) return {};
         if (const auto error = repair_error(install, source, active, release, launcher_version); !error.empty()) return error;
         if (runtime_process_running(active.root)) return "in-use";
 
@@ -660,6 +671,6 @@ namespace parts
             if (const auto error = repair_file(bundle, from, live.manifests / filename, bytes->size(), digest, replacement);
                 !error.empty()) return error;
         }
-        return verify_runtime(read_runtime(install), launcher_version, verification) ? std::string{} : verification;
+        return verify_play_runtime(read_runtime(install), launcher_version, verification) ? std::string{} : verification;
     }
 }

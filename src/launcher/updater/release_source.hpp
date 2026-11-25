@@ -17,7 +17,6 @@ namespace release_source
 {
     constexpr auto launcher_repo = "ChronoRixun/show23-pc-launcher";
     constexpr auto parts_repo = "ChronoRixun/show23-pc";
-    constexpr auto emulator_repo = "ChronoRixun/show23-pc-emulator";
 
     // The setting (launcher-update-channel): Stable unless the player chose Beta.
     release_channel::channel current_channel();

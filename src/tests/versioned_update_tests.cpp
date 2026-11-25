@@ -77,7 +77,7 @@ namespace
 
         fs::path launcher_zip()
         {
-            const std::string slot = "show23-pc-0.1.4-win64-portable/show23-pc/versions/0.1.4/";
+            const std::string slot = "show23-pc-0.1.4-win64-native-portable/show23-pc/versions/0.1.4/";
             return zip({{slot + versions::launcher_exe, "exe"}, {slot + "version.txt", inventory_for("exe")}});
         }
     };
@@ -135,12 +135,13 @@ TEST(versioned_updates_publish_only_the_verified_subtree_beside_a_damaged_slot)
     fixture.write("0.1.4~/sentinel", "outside");
     fixture.write("manual/player.txt", "keep");
     fixture.write(".download-12/launcher.json", "receipt");
+    const std::string dll = "runtime/0.1.4/emulator/libc++.dll";
     const versions::inventory inventory{"0.1.4", "stable", 1,
-        {{versions::launcher_exe, versions::sha256("exe"), 3}}, {}};
-    const std::string prefix = "show23-pc-0.1.4-win64-portable/";
+        {{versions::launcher_exe, versions::sha256("exe"), 3}, {dll, versions::sha256("dll"), 3}}, {}};
+    const std::string prefix = "show23-pc-0.1.4-win64-native-portable/";
     const auto slot = prefix + "show23-pc/versions/0.1.4/";
     const auto zip = fixture.zip({{prefix + "manual/player.txt", "new"}, {prefix + "show23-pc.exe", "new"},
-        {slot + versions::launcher_exe, "exe"}, {slot + "version.txt", versions::encode(inventory)}});
+        {slot + versions::launcher_exe, "exe"}, {slot + dll, "dll"}, {slot + "version.txt", versions::encode(inventory)}});
 
     update::partial_slot partial(fixture.root, "0.1.4");
     CHECK(partial.extract(zip, [] { return false; }).empty());
@@ -154,6 +155,7 @@ TEST(versioned_updates_publish_only_the_verified_subtree_beside_a_damaged_slot)
     CHECK(partial.publish(fixture.root / ".download-12/launcher.json", {}, folder).empty());
     CHECK(folder == "0.1.4~2");
     CHECK(versions::verify(fixture.root / "0.1.4~2", versions::check_mode::full));
+    CHECK(versions::read_record(fixture.root / "0.1.4~2" / dll) == "dll");
     CHECK(versions::read_record(fixture.root / "0.1.4~2.launcher.json") == "receipt");
     CHECK(versions::read_record(fixture.root / "0.1.4/show23-pc-launcher.exe") == "old");
     CHECK(versions::read_record(fixture.root / "manual/player.txt") == "keep");
@@ -163,7 +165,7 @@ TEST(versioned_updates_publish_only_the_verified_subtree_beside_a_damaged_slot)
 TEST(versioned_updates_reject_an_unsafe_file_in_the_selected_subtree)
 {
     update_fixture fixture;
-    const std::string slot = "show23-pc-0.1.4-win64-portable/show23-pc/versions/0.1.4/";
+    const std::string slot = "show23-pc-0.1.4-win64-native-portable/show23-pc/versions/0.1.4/";
     const auto zip = fixture.zip({{slot + "../user.txt", "injected"}});
     update::partial_slot partial(fixture.root, "0.1.4");
     CHECK(!partial.extract(zip, [] { return false; }).empty());

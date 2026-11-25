@@ -40,8 +40,8 @@ namespace
             bundle = root / "source";
             install = root / "install";
             write(bundle / "manifests/runtime.txt", "0.1.0\n");
-            part("emulator", "emulator", {"shadPS4.exe"});
-            part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py", "card_import.py",
+            engine();
+            part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py", "card_import.py", "manual_mode.py",
                 "tables/ol-messages.csv", "replies/fixture.xml"});
             part("profile", "tools/profile", {"defaults.txt"});
             write(install / "data/profiles/default/user/save", "preserve");
@@ -51,7 +51,15 @@ namespace
             std::error_code error;
             fs::remove_all(root, error);
         }
-        void part(std::string_view name, std::string_view directory, std::initializer_list<const char*> files)
+        void engine(std::initializer_list<const char*> extra = {})
+        {
+            std::vector<const char*> files{"bb-probe.exe", "MANIFEST.tsv", "bbport.ini", "input.ini", "prepare.py",
+                "prep/prepare.py", "prep/link_modules.py", "prep/link_libc.py", "prep/content_profile.py"};
+            files.insert(files.end(), extra);
+            part("emulator", "emulator", files);
+        }
+
+        void part(std::string_view name, std::string_view directory, const std::vector<const char*>& files)
         {
             for (auto file : files) write(bundle / "runtime/0.1.0" / directory / file, "abc");
             rapidjson::StringBuffer buf;
@@ -82,6 +90,24 @@ namespace
     };
 }
 
+TEST(play_verification_requires_listed_engine_files_and_checks_their_hashes)
+{
+    fixture f;
+    std::string message;
+    f.part("emulator", "emulator", {"shadPS4.exe"});
+    CHECK(parts::verify_runtime(parts::read_runtime(f.bundle), "0.1.0", message));
+    CHECK(!parts::verify_play_runtime(parts::read_runtime(f.bundle), "0.1.0", message));
+    CHECK(message.find("bb-probe.exe") != std::string::npos);
+    CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+    CHECK(fs::remove(f.bundle / "runtime/0.1.0/emulator/shadPS4.exe"));
+    f.engine({"fixture-codec.dll"});
+    CHECK(parts::verify_play_runtime(parts::read_runtime(f.bundle), "0.1.0", message));
+    const auto dll = f.bundle / "runtime/0.1.0/emulator/fixture-codec.dll";
+    write(dll, "bad");
+    CHECK(!parts::verify_play_runtime(parts::read_runtime(f.bundle), "0.1.0", message));
+    CHECK(message.find("fixture-codec.dll") != std::string::npos);
+}
+
 TEST(bundled_runtime_stages_and_verifies_files_without_touching_user_data)
 {
     fixture f;
@@ -89,7 +115,7 @@ TEST(bundled_runtime_stages_and_verifies_files_without_touching_user_data)
     std::string error;
     CHECK(parts::verify_runtime(parts::read_runtime(f.install), "0.1.0", error));
     const auto save = f.install / "data/profiles/default/user/save";
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     const auto marker = f.install / "manifests/runtime.txt";
     const auto before = fs::last_write_time(exe);
     const auto before_marker = fs::last_write_time(marker);
@@ -101,11 +127,33 @@ TEST(bundled_runtime_stages_and_verifies_files_without_touching_user_data)
     CHECK(content == "preserve");
 }
 
+TEST(bundled_runtime_refuses_downgraded_or_unidentified_server_state)
+{
+    fixture f;
+    const auto floor = f.install / "manifests/server-state-version.txt";
+    const auto state = f.install / "data/profiles/default/server/state.json";
+    write(state, R"({"progress":"preserve"})");
+    CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+    CHECK(read(state) == R"({"progress":"preserve"})");
+    CHECK(fs::remove(state));
+    CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+    CHECK(read(floor) == "0.1.0\n");
+    write(state, R"({"progress":"newer"})");
+    write(floor, "0.2.0\n");
+    std::string message;
+    CHECK(!parts::verify_play_runtime(parts::read_runtime(f.install), "0.1.0", message));
+    CHECK(message.find("newer local server") != std::string::npos);
+    CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
+    CHECK(!parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").repairable);
+    CHECK(!parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
+    CHECK(read(floor) == "0.2.0\n" && read(state) == R"({"progress":"newer"})");
+}
+
 TEST(bundled_runtime_leaves_damage_for_explicit_same_version_repair)
 {
     fixture f;
     CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     const auto marker = f.install / "manifests/runtime.txt";
     const auto old_manifest = f.install / "manifests/0.1.0/emulator.json";
     const auto healthy = f.install / "runtime/0.1.0/server/olserver.py";
@@ -120,7 +168,7 @@ TEST(bundled_runtime_leaves_damage_for_explicit_same_version_repair)
     write(exe, "bad");
     const auto damaged = parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0");
     CHECK(!damaged.ready && !damaged.fresh && damaged.repairable);
-    CHECK(damaged.message.find("emulator/shadPS4.exe") != std::string::npos);
+    CHECK(damaged.message.find("Game engine / bb-probe.exe") != std::string::npos);
     CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
     CHECK(read(exe) == "bad");
     CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
@@ -144,10 +192,10 @@ TEST(bundled_runtime_keeps_completed_repairs_when_a_later_file_is_locked)
     for (const auto* locked_file : {"emulator/support.dll", "server/olserver.py"})
     {
         fixture f;
-        f.part("emulator", "emulator", {"shadPS4.exe", "support.dll"});
+        f.engine({"support.dll"});
         CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
         const auto slot = f.install / "runtime/0.1.0";
-        const auto exe = slot / "emulator/shadPS4.exe";
+        const auto exe = slot / "emulator/bb-probe.exe";
         const auto target = slot / locked_file;
         const auto missing = slot / "tools/profile/defaults.txt";
         write(exe, "bad");
@@ -180,7 +228,7 @@ TEST(bundled_runtime_refuses_staging_and_repair_from_a_corrupt_bundle)
 {
     fixture f;
     CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     write(exe, "bad");
     write(f.bundle / "runtime/0.1.0/server/python/python.exe", "bad");
     const auto other = f.root / "other";
@@ -196,7 +244,7 @@ TEST(bundled_runtime_completes_a_markerless_slot_only_with_exact_manifests_and_f
     CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
     const auto marker = f.install / "manifests/runtime.txt";
     const auto manifest = f.install / "manifests/0.1.0/emulator.json";
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     CHECK(fs::remove(marker));
     const auto original = read(manifest);
     write(manifest, original + "\n");
@@ -235,13 +283,13 @@ TEST(bundled_runtime_recovers_between_slot_and_manifest_renames)
     const auto partial_stage = f.install / "runtime/.bundled-123-456-8";
     const auto unrelated = f.install / "runtime/.bundled-123-456-9";
     const auto backup = f.install / "runtime/.repair-0.1.0-1";
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     CHECK(fs::remove(marker));
     fs::create_directories(private_stage / "manifests");
     fs::rename(manifests, private_stage / "manifests/0.1.0");
     write(private_stage / ".fresh-stage", "show23-fresh-runtime-v1\n0.1.0\n");
     write(partial_stage / ".fresh-stage", "show23-fresh-runtime-v1\n0.1.0\n");
-    write(partial_stage / "runtime/0.1.0/emulator/shadPS4.exe", "partial copy");
+    write(partial_stage / "runtime/0.1.0/emulator/bb-probe.exe", "partial copy");
     write(unrelated / "file", "keep");
     write(backup / "old/file", "keep");
 
@@ -291,7 +339,7 @@ TEST(bundled_runtime_repair_requires_known_exact_part_versions)
     fixture f;
     CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
     const auto manifest = f.install / "manifests/0.1.0/emulator.json";
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     auto ahead = read(manifest);
     const auto version = ahead.find("\"version\":\"0.1.0\"");
     CHECK(version != std::string::npos);
@@ -320,7 +368,7 @@ TEST(bundled_runtime_only_resumes_an_interrupted_repair_on_request)
         CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
         const auto slot = f.install / "runtime/0.1.0";
         const auto manifests = f.install / "manifests/0.1.0";
-        write(slot / "emulator/shadPS4.exe", "bad");
+        write(slot / "emulator/bb-probe.exe", "bad");
         const auto transaction = f.install / "runtime/.repair-0.1.0-1";
         fs::create_directories(transaction / "new");
         fs::copy(f.bundle / "runtime", transaction / "new/runtime", fs::copy_options::recursive);
@@ -342,7 +390,7 @@ TEST(bundled_runtime_only_resumes_an_interrupted_repair_on_request)
         }
         CHECK(parts::repair_bundled_runtime(f.bundle, f.install, "0.1.0").empty());
         CHECK(parts::inspect_bundled_runtime(f.bundle, f.install, "0.1.0").ready);
-        const auto original = transaction / "old/runtime/0.1.0/emulator/shadPS4.exe";
+        const auto original = transaction / "old/runtime/0.1.0/emulator/bb-probe.exe";
         CHECK(fs::exists(original) == (interruption >= 1));
         if (interruption >= 1) CHECK(read(original) == "bad");
     }
@@ -355,7 +403,7 @@ TEST(bundled_runtime_leases_allow_shared_play_and_exclude_repair)
     CHECK(!parts::runtime_in_use(f.install));
     CHECK(!fs::exists(manifests));
     CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
-    const auto exe = f.install / "runtime/0.1.0/emulator/shadPS4.exe";
+    const auto exe = f.install / "runtime/0.1.0/emulator/bb-probe.exe";
     write(exe, "bad");
     {
         const parts::runtime_lease play(f.install, false);
@@ -388,7 +436,7 @@ TEST(bundled_runtime_excludes_unleased_images_from_new_and_interrupted_repair)
         fixture f;
         CHECK(parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
         const auto slot = f.install / "runtime/0.1.0";
-        const auto damaged = slot / "emulator/shadPS4.exe";
+        const auto damaged = slot / "emulator/bb-probe.exe";
         const auto image = slot / "emulator/fixture-child.exe";
         const auto transaction = f.install / "runtime/.repair-0.1.0-1";
         const auto backup = transaction / "old/runtime/0.1.0";
@@ -447,7 +495,7 @@ TEST(bundled_runtime_excludes_unleased_images_from_new_and_interrupted_repair)
 TEST(bundled_runtime_requires_the_card_importer_in_the_manifest)
 {
     fixture f;
-    f.part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py",
+    f.part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py", "manual_mode.py",
         "tables/ol-messages.csv", "replies/fixture.xml"});
     CHECK(!parts::stage_bundled_runtime(f.bundle, f.install, "0.1.0"));
     CHECK(!fs::exists(f.install / "manifests/runtime.txt"));
