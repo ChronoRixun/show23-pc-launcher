@@ -13,6 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 REPO = Path(__file__).resolve().parents[1]
 FIRST_VERSIONED = (0, 1, 3)
+FIRST_NATIVE = "0.2.0"
 EXE = "show23-pc-launcher.exe"
 MARKERS = ("SHOW23_FIXTURE_PORT", "SHOW23_UPDATE_FIXTURE", "show23-pc-update-fixture-",
            "fixture-mode", "fixture-before-image")
@@ -342,7 +343,7 @@ if __name__ == "__main__":
                 bundle.rename(args.out)
             print(f"Staged runtime {args.version} in {args.out}")
         else:
-            package(args.version, args.min_launcher or args.version, args.engine, args.server, args.out,
+            package(args.version, args.min_launcher or FIRST_NATIVE, args.engine, args.server, args.out,
                     args.manual_mode, args.server_license)
     except (OSError, ValueError, KeyError, TypeError) as error:
         sys.exit(str(error))

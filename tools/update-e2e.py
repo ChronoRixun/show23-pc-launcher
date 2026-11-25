@@ -50,25 +50,29 @@ def json_bytes(value):
     return (json.dumps(value, indent=2) + "\n").encode()
 
 
-def release_manifest(version, filename, data):
+def release_manifest(version, filename, data, floor=OLD):
     return {
         "schema": 1, "part": "launcher", "version": version,
-        "channel": "beta" if "-" in version else "stable", "min_launcher": OLD,
+        "channel": "beta" if "-" in version else "stable", "min_launcher": floor,
         "files": [{"path": filename, "size": len(data), "sha256": digest(data)}],
         "compatibility": {part: "*" for part in ("emulator", "server", "profile")},
     }
 
 
-def release_files(version, exe):
+def release_files(version, exe, *, runtime=None, floor=OLD):
     if b"fixture-mode" not in exe or b"SHOW23_FIXTURE_PORT" not in exe:
         raise ValueError("The launcher must be a gated update-fixture build.")
     files = {
         "show23-pc-launcher.exe": exe,
         "ui/main.html": b"Local update fixture\n",
         "manual/play.cmd": f'@echo off\r\necho {version}:%~1\r\n'.encode(),
-        "manifests/launcher.json": json_bytes(release_manifest(version, "show23-pc-launcher.exe", exe)),
-        **update_e2e_runtime.runtime_files(),
+        "manifests/launcher.json": json_bytes(release_manifest(version, "show23-pc-launcher.exe", exe, floor)),
+        **(runtime if runtime is not None else update_e2e_runtime.runtime_files()),
     }
+    return seal_files(version, files)
+
+
+def seal_files(version, files):
     channel = "beta" if "-" in version else "stable"
     body = f"show23-pc version 1\nversion {version}\nchannel {channel}\nbootstrap 1\n"
     body += "".join(f"file {digest(data)} {len(data)} {name}\n" for name, data in sorted(files.items()))
@@ -196,10 +200,10 @@ class Copy:
 
 
 @contextmanager
-def feed(version, files, *, before_listing=None):
+def feed(version, files, *, before_listing=None, floor=OLD):
     name = asset_name(version) + ".zip"
     payload = make_asset(version, files)
-    manifest = release_manifest(version, name, payload)
+    manifest = release_manifest(version, name, payload, floor)
     assets = {name: payload, "launcher.json": json_bytes(manifest),
               "SHA256SUMS.txt": f"{digest(payload)}  {name}\n".encode()}
     requests = []
@@ -419,6 +423,93 @@ def visible_start(ctx):
     return update_e2e_window.confirm(top, OLD, capture, ctx.capture_tool, second=True)
 
 
+def native_update(ctx):
+    old = "0.2.0"
+    incoming = update_e2e_runtime.RUNTIME
+    top = ctx.root / "native upgrade"
+    install = top / "existing install with spaces"
+    require_portable_extraction(ctx.native_zip, top)
+    data = top / "show23-pc"
+    versions = data / "versions"
+    selected = versions / old
+    assert (selected / "manifests/runtime.txt").read_text().strip() == old
+    assert (ctx.native_runtime / "manifests/runtime.txt").read_text().strip() == incoming
+    shutil.copytree(ctx.native_install, install)
+    marker = install / "manifests/runtime.txt"
+    assert marker.read_text().strip() == old
+    old_runtime = update_e2e_runtime.inventory(install / "runtime" / old)
+    before = update_e2e_runtime.inventory(install / "data")
+    assert "games/CUSA35521/game.json" in before
+    assert json.loads((install / "data/games/CUSA35521/game.json").read_text())["mode"] == "in_place"
+
+    # Keep the published runtime, UI and folder layout. Substitute the gated fixture image
+    # and its receipt so the old production updater can consume a private loopback feed.
+    old_exe = ctx.old.read_bytes()
+    assert b"SHOW23_FIXTURE_PORT" in old_exe
+    initial = {p.relative_to(selected).as_posix(): p.read_bytes()
+               for p in selected.rglob("*") if p.is_file() and p.name != "version.txt"}
+    initial["show23-pc-launcher.exe"] = old_exe
+    initial["manifests/launcher.json"] = json_bytes(release_manifest(old, "show23-pc-launcher.exe", old_exe, old))
+    write_files(selected, seal_files(old, initial))
+    shutil.copyfile(ctx.bootstrap, top / "show23-pc.exe")
+    write_files(data, {"fixture-mode": old.encode(), "user/properties.json": json_bytes({
+        "launcher-update-channel": "stable", "launcher-auto-shortcuts": "false", "show23-install": str(install)})})
+    new_runtime = {p.relative_to(ctx.native_runtime).as_posix(): p.read_bytes()
+                   for folder in ("manifests", "runtime") for p in (ctx.native_runtime / folder).rglob("*") if p.is_file()}
+    files = release_files(incoming, ctx.new.read_bytes(), runtime=new_runtime, floor=old)
+    result_path = data / "fixture-runtime-result.json"
+
+    def start(port, action, *, target=install, cut=None, expect=0):
+        result_path.unlink(missing_ok=True)
+        env = {key: value for key, value in os.environ.items() if not key.upper().startswith("SHOW23_FIXTURE_")}
+        env.update(SHOW23_FIXTURE_PORT=str(port), SHOW23_FIXTURE_ACTION=action, SHOW23_FIXTURE_INSTALL=str(target))
+        if cut:
+            env["SHOW23_FIXTURE_KILL_AT"] = cut
+        run = subprocess.run([top / "show23-pc.exe", "--update-fixture"], cwd=top, env=env,
+                             capture_output=True, timeout=120)
+        detail = data / "fixture-error.txt"
+        assert run.returncode == expect, (run.returncode, expect, detail.read_text() if detail.exists() else run.stderr)
+        return json.loads(result_path.read_bytes()) if result_path.exists() else None
+
+    with feed(incoming, files, floor=old) as (port, requests, receipt):
+        start(port, "confirm")
+        (data / "fixture-mode").write_text(incoming, encoding="ascii")
+        start(port, "update")
+        pointer = (versions / "pointer.txt").read_text(encoding="ascii")
+        assert f"current {incoming}\nprevious {old}\n" in pointer, pointer
+        assert len(requests) == 4 and requests[0].endswith("/latest") and requests[-1].endswith(".zip"), requests
+        assert receipt["min_launcher"] == old
+        assert marker.read_text().strip() == old
+        assert update_e2e_runtime.inventory(install / "data") == before
+        status = start(port, "inspect-runtime")
+        assert status["ready"] and status["update"] == incoming, status
+
+        cuts = ("after-copy", "after-manifests", "after-slot", "after-history", "after-selection")
+        for cut in cuts:
+            interrupted = top / ("interrupted-" + cut)
+            shutil.copytree(install, interrupted)
+            start(port, "activate-runtime", target=interrupted, cut="runtime-update-" + cut, expect=111)
+            interrupted_marker = interrupted / "manifests/runtime.txt"
+            want = incoming if cut == "after-selection" else old
+            assert interrupted_marker.read_text().strip() == want
+            assert start(port, "inspect-runtime", target=interrupted)["ready"]
+            if want == old:
+                assert start(port, "activate-runtime", target=interrupted)["ok"]
+            assert interrupted_marker.read_text().strip() == incoming
+            assert update_e2e_runtime.inventory(interrupted / "data") == before
+
+        activated = start(port, "activate-runtime")
+        assert activated["ok"] and activated["ready"] and activated["rollback"] == old, activated
+        verified = start(port, "verify-runtime")
+        assert verified["ok"] and verified["message"].startswith("Verified "), verified
+        assert marker.read_text().strip() == incoming
+        assert (install / "manifests/server-state-version.txt").read_text().strip() == old
+        assert update_e2e_runtime.inventory(install / "runtime" / old) == old_runtime
+        assert update_e2e_runtime.inventory(install / "data") == before
+    return {"old": old, "active": incoming, "verified": verified["message"],
+            "dataEntries": len(before), "crashCuts": cuts, "feedRequests": requests}
+
+
 def run(ctx):
     ctx.record("E1", "Fresh extraction confirms a trial and stages the bundled runtime.", lambda: fresh(ctx))
     ctx.record("E2", "An in-app update confirms Beta 2, preserving earlier files and the installed runtime.",
@@ -458,8 +549,10 @@ def run(ctx):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("bootstrap", "old", "new", "stable", "next-beta", "work"):
+    for name in ("bootstrap", "old", "new", "work"):
         parser.add_argument("--" + name, type=lambda path: Path(path).resolve(), required=True)
+    for name in ("stable", "next-beta", "native-zip", "native-install", "native-runtime"):
+        parser.add_argument("--" + name, type=lambda path: Path(path).resolve())
     parser.add_argument("--normal-zip", type=lambda path: Path(path).resolve())
     parser.add_argument("--capture-tool", type=lambda path: Path(path).resolve())
     parser.add_argument("--archived-legacy", action="store_true", help="Run historical cases with archived 0.1.x inputs")
@@ -472,8 +565,18 @@ if __name__ == "__main__":
                         default=PROBES / "m2/legacy-headless.exe")
     parser.add_argument("--legacy-source", type=lambda path: Path(path).resolve(),
                         default=PROBES / "m2/legacy-launcher-update.cpp")
-    context = Matrix(parser.parse_args())
-    run(context)
+    args = parser.parse_args()
+    if args.cases == "E17":
+        if not all((args.native_zip, args.native_install, args.native_runtime)):
+            parser.error("E17 requires --native-zip, --native-install and --native-runtime.")
+    elif not all((args.stable, args.next_beta)):
+        parser.error("Supply --stable and --next-beta for the existing updater matrix.")
+    context = Matrix(args)
+    if args.cases == "E17":
+        context.record("E17", "Published native install self-updates then activates the new runtime without changing data.",
+                       lambda: native_update(context))
+    else:
+        run(context)
     failures = sum(row["result"] != "pass" for row in context.results)
     print(f"{len(context.results)} cases, {failures} failed")
     sys.exit(1 if failures or not context.results else 0)

@@ -866,7 +866,7 @@ test('Launcher shortcuts action reports a partial update', async () => {
 });
 
 
-test('Bundled parts explain updates only when their own channel is unpublished', async () => {
+test('Bundled parts identify the launcher download in every language', async () => {
     const labels = {
         en: ['Included with the launcher', 'Bundled in the launcher download.'],
         fr: ['Inclus avec le lanceur', 'Fait partie du téléchargement du lanceur.'],
@@ -889,14 +889,13 @@ test('Bundled parts explain updates only when their own channel is unpublished',
         assert.equal(cell.textContent, label);
         assert.ok(cell.querySelector('.dot.ok'));
         assert.equal(cell.querySelector('.status-text').getAttribute('title'), hint);
-        assert.match(view.id('part-status-server').textContent, /0\.1\.3/);
-        assert.equal(view.id('part-status-profile').textContent, 'Bad manifest');
-        assert.ok(view.id('part-status-profile').querySelector('.dot.bad'));
+        assert.equal(view.id('part-status-server').textContent, label);
+        assert.equal(view.id('part-status-profile').textContent, label);
     }
 });
 
 test('Unbundled or offline parts keep their existing status', async () => {
-    for (const [offline, expected] of [[false, 'No release published yet'], [true, 'Offline mode']]) {
+    for (const [offline, expected] of [[false, 'No release published yet'], [true, 'Included with the launcher']]) {
         const view = open({
             'get-settings': { language: 'en', offline },
             'get-parts': { parts: [{ part: 'emulator', state: 'unpublished', bundled: offline }] }
@@ -961,6 +960,40 @@ test('Home never offers repair for an unidentifiable runtime', async () => {
     assert.equal(view.id('play').disabled, true);
     assert.equal(view.id('repair-runtime').hidden, true);
     assert.match(view.id('game-source-notice').textContent, /bad runtime marker/);
+});
+
+test('runtime update is confirmed once from Settings and reports the activated version', async () => {
+    let installed = false;
+    const view = open({
+        'get-show23': () => installed ? { ready: true, runtimeRollbackVersion: '0.2.0' } :
+            { ready: true, runtimeUpdateVersion: '0.2.1' },
+        'change-runtime': () => { installed = true; return true; },
+        'get-runtime-repair': { busy: false, success: true }
+    });
+    view.window.showMessageBox = async () => 1;
+    await view.clock.advance(0);
+    assert.equal(view.id('update-runtime').hidden, false);
+    view.id('settings').click();
+    await view.clock.advance(0);
+    view.id('settings-update-runtime').click();
+    await view.clock.advance(0);
+    const requests = view.requests.filter(item => item.command === 'change-runtime');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].payload.version, '0.2.1');
+    assert.equal(requests[0].payload.operation, 'update');
+    assert.match(view.id('settings-runtime-result').textContent, /Updated game files to 0\.2\.1/);
+    assert.equal(view.id('settings-update-runtime').hidden, true);
+    assert.equal(view.id('settings-rollback-runtime').hidden, false);
+});
+
+test('runtime controls honor Play contention and explain a server-blocked rollback', async () => {
+    const view = open({ 'get-show23': { ready: true, runtimeInUse: true, runtimeUpdateVersion: '0.2.1',
+        runtimeRollbackBlocked: true } });
+    await view.clock.advance(0);
+    assert.equal(view.id('update-runtime').disabled, true);
+    assert.equal(view.id('settings-update-runtime').disabled, true);
+    assert.equal(view.id('settings-rollback-runtime').hidden, true);
+    assert.match(view.id('settings-runtime-note').textContent, /newer server/i);
 });
 
 test('confirmed Repair reports success and restores Play only after verification', async () => {

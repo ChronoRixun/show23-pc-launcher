@@ -1,6 +1,21 @@
 (function () {
     const translations = {
         "en": {
+            "runtimeChange": {
+                "update": "Update game files",
+                "rollback": "Restore previous game files",
+                "confirm": {
+                    "update": "Update the game files to {{version}}? Saves, progress and settings stay in place.",
+                    "rollback": "Restore game files from {{version}}? Saves, progress and settings stay in place."
+                },
+                "working": "Preparing verified game files…",
+                "done": {
+                    "update": "Updated game files to {{version}}.",
+                    "rollback": "Restored game files from {{version}}."
+                },
+                "failed": "Could not change the game files. {{detail}}",
+                "blocked": "The newer server has been started. Restoring the previous game files could overwrite progress."
+            },
             "runtimeRepair": {
                 "button": "Repair runtime",
                 "confirm": "Install a verified copy of the same runtime version? Game files, saves and settings stay in place.",
@@ -524,6 +539,21 @@
             }
         },
         "fr": {
+            "runtimeChange": {
+                "update": "Mettre à jour les fichiers du jeu",
+                "rollback": "Restaurer les fichiers précédents",
+                "confirm": {
+                    "update": "Mettre les fichiers du jeu à jour vers {{version}} ? Les sauvegardes, la progression et les paramètres sont conservés.",
+                    "rollback": "Restaurer les fichiers du jeu de la version {{version}} ? Les sauvegardes, la progression et les paramètres sont conservés."
+                },
+                "working": "Préparation des fichiers vérifiés…",
+                "done": {
+                    "update": "Fichiers du jeu mis à jour vers {{version}}.",
+                    "rollback": "Fichiers du jeu restaurés depuis {{version}}."
+                },
+                "failed": "Impossible de modifier les fichiers du jeu. {{detail}}",
+                "blocked": "Le serveur plus récent a démarré. Restaurer les fichiers précédents pourrait écraser la progression."
+            },
             "runtimeRepair": {
                 "button": "Réparer les composants",
                 "confirm": "Installer une copie vérifiée de la même version ? Les fichiers du jeu, les sauvegardes et les paramètres restent en place.",
@@ -1041,6 +1071,21 @@
             }
         },
         "es": {
+            "runtimeChange": {
+                "update": "Actualizar archivos del juego",
+                "rollback": "Restaurar archivos anteriores",
+                "confirm": {
+                    "update": "¿Actualizar los archivos del juego a {{version}}? Se conservan las partidas, el progreso y los ajustes.",
+                    "rollback": "¿Restaurar los archivos del juego de {{version}}? Se conservan las partidas, el progreso y los ajustes."
+                },
+                "working": "Preparando los archivos verificados…",
+                "done": {
+                    "update": "Archivos del juego actualizados a {{version}}.",
+                    "rollback": "Archivos del juego restaurados desde {{version}}."
+                },
+                "failed": "No se pudieron cambiar los archivos del juego. {{detail}}",
+                "blocked": "Ya se inició el servidor más reciente. Restaurar los archivos anteriores podría sobrescribir el progreso."
+            },
             "runtimeRepair": {
                 "button": "Reparar componentes",
                 "confirm": "¿Instalar una copia verificada de la misma versión? Los archivos del juego, las partidas y los ajustes se conservan.",
@@ -1558,6 +1603,21 @@
             }
         },
         "ru": {
+            "runtimeChange": {
+                "update": "Обновить файлы игры",
+                "rollback": "Восстановить предыдущие файлы",
+                "confirm": {
+                    "update": "Обновить файлы игры до версии {{version}}? Сохранения, прогресс и настройки останутся на месте.",
+                    "rollback": "Восстановить файлы игры версии {{version}}? Сохранения, прогресс и настройки останутся на месте."
+                },
+                "working": "Подготовка проверенных файлов…",
+                "done": {
+                    "update": "Файлы игры обновлены до версии {{version}}.",
+                    "rollback": "Восстановлены файлы игры версии {{version}}."
+                },
+                "failed": "Не удалось изменить файлы игры. {{detail}}",
+                "blocked": "Более новый сервер уже запускался. Восстановление предыдущих файлов может перезаписать прогресс."
+            },
             "runtimeRepair": {
                 "button": "Восстановить компоненты",
                 "confirm": "Установить проверенную копию той же версии? Файлы игры, сохранения и настройки останутся на месте.",

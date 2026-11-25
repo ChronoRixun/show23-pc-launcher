@@ -18,6 +18,14 @@ The first launch can take a few minutes. The game starts with fresh saves
 and shows the first-launch tutorial. The local server stops when the game
 exits or you press Ctrl+C. This release supports 64-bit Windows.
 
+After installing a launcher update, close Play and use the same setup command
+with only your existing native install folder to activate the bundled runtime:
+
+  manual\setup.cmd "C:\Games\Show23 install"
+
+Add --rollback to restore its previous runtime when the local server's
+progress version allows it. The install's saves and settings stay in place.
+
 Saves and settings are under data/profiles/default/engine. The local server
 keeps progress and certificates under data/profiles/default/server. Session
 logs are under data/logs. You can select this native install in the launcher.

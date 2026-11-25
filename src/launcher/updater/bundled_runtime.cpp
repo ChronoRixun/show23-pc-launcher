@@ -1,5 +1,6 @@
 #include "std_include.hpp"
 #include "part_store.hpp"
+#include "show23/card_import.hpp"
 #include "show23/input_paths.hpp"
 
 #include <TlHelp32.h>
@@ -150,7 +151,8 @@ namespace parts
             if (!std::ranges::all_of(runtime_parts, [&](const auto part)
             {
                 const auto& manifest = source.manifests[index(part)];
-                return manifest && fs::path(manifest->version) == release;
+                return manifest && fs::path(manifest->version) == release &&
+                    release_channel::compare(launcher_version, manifest->min_launcher) >= 0;
             })) return false;
             std::string verification;
             return verify_runtime(source, launcher_version, verification);
@@ -384,6 +386,62 @@ namespace parts
                 : runtime(root / "runtime" / release), manifests(root / "manifests" / release) {}
         };
 
+        fs::path history_folder(const fs::path& install)
+        {
+            return install / "manifests/runtime-history";
+        }
+
+        std::string previous_runtime(const fs::path& install, const std::string& active)
+        {
+            auto previous = manifest_bytes(history_folder(install) / (active + ".txt")).value_or("");
+            if (!previous.empty() && previous.back() == '\n') previous.pop_back();
+            return is_version(previous) && release_channel::compare(previous, active) < 0 ? previous : std::string{};
+        }
+
+        bool newer_bundle(const installed_runtime& active, const installed_runtime& source)
+        {
+            return active.error.empty() && !active.root.empty() && !source.root.empty() &&
+                release_channel::compare(source.root.filename().string(), active.root.filename().string()) > 0;
+        }
+
+        std::string publish_inactive_slot(const fs::path& bundle, const fs::path& install, const installed_runtime& source,
+                                          const std::string& release, std::string_view launcher_version)
+        {
+            const slot_paths target(install, release), expected(bundle, release);
+            const auto manifests = directory_at(target.manifests);
+            const auto files = directory_at(target.runtime);
+            if (files == directory_state::invalid || manifests == directory_state::invalid ||
+                (files == directory_state::present && manifests != directory_state::present) ||
+                (manifests == directory_state::present && !exact_manifests(target.manifests, expected.manifests)))
+                return "An inactive runtime slot conflicts with the bundled update.";
+
+            if (files == directory_state::missing)
+            {
+                const auto runtime = ensure_directory(install / "runtime");
+                if (!usable_directory(runtime)) return "Could not open the runtime folder.";
+                const auto stage = create_stage(runtime.path);
+                if (stage.empty()) return "Could not create a runtime staging folder.";
+                const auto clean = utils::finally([&] { remove_stage(stage); });
+                const slot_paths candidate(stage, release);
+                if (!atomically_write(inspect(stage), ".fresh-stage", fresh_record(release)) ||
+                    !stage_copy(bundle, source, stage, release, launcher_version))
+                    return "Could not copy and verify the bundled runtime.";
+                fixture_cut(bundle, "runtime-update-after-copy");
+                if (manifests == directory_state::missing && !move(candidate.manifests, target.manifests))
+                    return "Could not publish the new runtime manifests.";
+                fixture_cut(bundle, "runtime-update-after-manifests");
+                if (!move(candidate.runtime, target.runtime)) return "Could not publish the new runtime files.";
+                fixture_cut(bundle, "runtime-update-after-slot");
+            }
+
+            const auto installed = read_runtime(install, release);
+            std::string verification;
+            if (!exact_manifests(target.manifests, expected.manifests) || !exact_runtime_files(installed) ||
+                !verify_play_runtime(installed, launcher_version, verification))
+                return verification.empty() ? "The staged runtime did not match the bundle." : verification;
+            return {};
+        }
+
         bool sharing_error(const DWORD error)
         {
             return error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_USER_MAPPED_FILE;
@@ -543,7 +601,26 @@ namespace parts
     {
         const auto active = read_runtime(install);
         std::string verification;
-        if (verify_play_runtime(active, launcher_version, verification)) return {true, false, false, {}};
+        if (verify_play_runtime(active, launcher_version, verification))
+        {
+            runtime_check status{true, false, false, {}};
+            const auto source = read_runtime(bundle);
+            if (newer_bundle(active, source) && separate_roots(bundle, install) && frozen_source(source, launcher_version) &&
+                server_state_error(install, source.manifests[index(id::server)]->version).empty())
+                status.update_version = source.root.filename().string();
+            const auto previous = previous_runtime(install, active.root.filename().string());
+            if (!previous.empty())
+            {
+                const auto retained = read_runtime(install, previous);
+                if (complete_layout(retained))
+                {
+                    status.rollback_blocked = !server_state_error(install, retained.manifests[index(id::server)]->version).empty();
+                    if (!status.rollback_blocked && frozen_source(retained, launcher_version) && exact_runtime_files(retained))
+                        status.rollback_version = previous;
+                }
+            }
+            return status;
+        }
         const auto source = read_runtime(bundle);
         if (!separate_roots(bundle, install) || !frozen_source(source, launcher_version)) return {false, false, false, verification};
         const auto server_version = source.manifests[index(id::server)]->version;
@@ -617,6 +694,54 @@ namespace parts
         if (directory_at(target.manifests) == directory_state::missing && !publish_manifests(candidate.manifests))
             return false;
         return publish_marker();
+    }
+
+    std::string change_runtime(const fs::path& bundle, const fs::path& install, std::string_view launcher_version,
+                               runtime_change action, std::string_view expected)
+    {
+        // An activation never stages into its source or claims a folder without an active slot.
+        if (!separate_roots(bundle, install) || read_runtime(install).root.empty())
+            return "Choose an existing game install.";
+        const runtime_lease lease(install, true);
+        if (!lease) return lease.busy() ? "in-use" : "Could not lock the game runtime.";
+        const show23::activity_lock activity;
+        if (!activity) return "in-use";
+        const auto active = read_runtime(install);
+        if (!complete_layout(active)) return "The active runtime could not be identified.";
+        if (runtime_process_running(active.root)) return "in-use";
+
+        const auto current = active.root.filename().string();
+        const auto updating = action == runtime_change::update;
+        const auto previous = updating ? std::string{} : previous_runtime(install, current);
+        if (!updating && previous.empty()) return "There is no previous runtime to restore.";
+        const auto target = updating ? read_runtime(bundle) : read_runtime(install, previous);
+        if (updating && !newer_bundle(active, target)) return "No newer bundled runtime is available.";
+        const auto selection = target.root.filename().string();
+        if (!expected.empty() && selection != expected) return "The offered runtime changed. Check again.";
+        if (!frozen_source(target, launcher_version)) return "The selected runtime failed verification or is incompatible.";
+        if (const auto error = server_state_error(install, target.manifests[index(id::server)]->version); !error.empty())
+            return error;
+        if (runtime_process_running(install / "runtime" / selection)) return "in-use";
+
+        if (updating)
+        {
+            if (const auto error = publish_inactive_slot(bundle, install, target, selection, launcher_version); !error.empty())
+                return error;
+            const auto history = ensure_directory(history_folder(install));
+            if (!atomically_write(history, selection + ".txt", current + '\n'))
+                return "Could not record the previous runtime.";
+            fixture_cut(bundle, "runtime-update-after-history");
+        }
+        else if (!exact_runtime_files(target)) return "The previous runtime contains unverified files.";
+
+        const auto manifests = inspect(install / "manifests");
+        if (!atomically_write(manifests, "runtime.txt", selection + '\n')) return "Could not select the new runtime.";
+        if (updating)
+        {
+            fixture_cut(bundle, "runtime-update-after-selection");
+            clean_fresh_stages(install / "runtime", selection);
+        }
+        return {};
     }
 
     std::string repair_bundled_runtime(const fs::path& bundle, const fs::path& install, std::string_view launcher_version)

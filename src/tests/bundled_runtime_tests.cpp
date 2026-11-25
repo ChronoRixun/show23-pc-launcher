@@ -1,6 +1,7 @@
 #include "std_include.hpp"
 #include "test.hpp"
 #include "show23/input_paths.hpp"
+#include "show23/card_import.hpp"
 #include "updater/part_store.hpp"
 #include <Windows.h>
 
@@ -32,14 +33,15 @@ namespace
     struct fixture
     {
         fs::path root, bundle, install;
-        fixture()
+        std::string version;
+        explicit fixture(std::string release = "0.1.0") : version(std::move(release))
         {
             static unsigned serial{};
             root = fs::current_path() / "build" / ("bundle fixture " + std::to_string(GetCurrentProcessId()) +
                 " " + std::to_string(GetTickCount64()) + " " + std::to_string(++serial));
             bundle = root / "source";
             install = root / "install";
-            write(bundle / "manifests/runtime.txt", "0.1.0\n");
+            write(bundle / "manifests/runtime.txt", version + "\n");
             engine();
             part("server", "server", {"python/python.exe", "olserver.py", "roster_decode.py", "card_import.py", "manual_mode.py",
                 "tables/ol-messages.csv", "replies/fixture.xml"});
@@ -61,15 +63,15 @@ namespace
 
         void part(std::string_view name, std::string_view directory, const std::vector<const char*>& files)
         {
-            for (auto file : files) write(bundle / "runtime/0.1.0" / directory / file, "abc");
+            for (auto file : files) write(bundle / "runtime" / version / directory / file, "abc");
             rapidjson::StringBuffer buf;
             rapidjson::Writer<rapidjson::StringBuffer> out(buf);
             out.StartObject();
             out.Key("schema"); out.Int(1);
             out.Key("part"); out.String(name.data(), static_cast<rapidjson::SizeType>(name.size()));
-            out.Key("version"); out.String("0.1.0");
+            out.Key("version"); out.String(version.c_str());
             out.Key("channel"); out.String("stable");
-            out.Key("min_launcher"); out.String("0.1.0");
+            out.Key("min_launcher"); out.String(version.c_str());
             out.Key("files"); out.StartArray();
             for (auto file : files)
             {
@@ -85,9 +87,115 @@ namespace
                 if (name != other) { out.Key(other); out.String("*"); }
             out.EndObject();
             out.EndObject();
-            write(bundle / "manifests/0.1.0" / (std::string(name) + ".json"), buf.GetString());
+            write(bundle / "manifests" / version / (std::string(name) + ".json"), buf.GetString());
         }
     };
+}
+
+TEST(runtime_update_commits_a_verified_slot_and_preserves_the_previous_one)
+{
+    fixture old("0.2.0"), next("0.2.1");
+    CHECK(parts::stage_bundled_runtime(old.bundle, old.install, old.version));
+    const auto state = old.install / "data/profiles/default/server/state.json";
+    const auto floor = old.install / "manifests/server-state-version.txt";
+    write(state, "player progress");
+    const auto status = parts::inspect_bundled_runtime(next.bundle, old.install, next.version);
+    CHECK(status.ready && status.update_version == next.version && status.rollback_version.empty());
+    CHECK(parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update).empty());
+    std::string details;
+    CHECK(parts::verify_play_runtime(parts::read_runtime(old.install), next.version, details));
+    CHECK(read(old.install / "manifests/runtime.txt") == "0.2.1\n");
+    CHECK(fs::exists(old.install / "runtime/0.2.0/emulator/bb-probe.exe"));
+    CHECK(read(state) == "player progress" && read(floor) == "0.2.0\n");
+    CHECK(parts::inspect_bundled_runtime(next.bundle, old.install, next.version).rollback_version == old.version);
+    CHECK(parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::rollback).empty());
+    CHECK(read(old.install / "manifests/runtime.txt") == "0.2.0\n");
+}
+
+TEST(runtime_update_refuses_busy_incompatible_or_corrupt_targets)
+{
+    fixture old("0.2.0"), next("0.2.1");
+    CHECK(parts::stage_bundled_runtime(old.bundle, old.install, old.version));
+    const auto update = [&] { return parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update); };
+    {
+        const parts::runtime_lease playing(old.install, false);
+        CHECK(playing);
+        CHECK(update() == "in-use");
+    }
+    {
+        const show23::activity_lock playing;
+        CHECK(playing);
+        CHECK(update() == "in-use");
+    }
+    const auto manifest = next.bundle / "manifests/0.2.1/server.json";
+    const auto original = read(manifest);
+    auto incompatible = original;
+    const auto rule = incompatible.find("\"launcher\":\"*\"");
+    CHECK(rule != std::string::npos);
+    if (rule == std::string::npos) return;
+    incompatible.replace(rule, std::string_view("\"launcher\":\"*\"").size(), "\"launcher\":\">=9.0.0\"");
+    write(manifest, incompatible);
+    CHECK(!update().empty());
+    write(manifest, original);
+    write(next.bundle / "runtime/0.2.1/server/olserver.py", "bad");
+    CHECK(!update().empty());
+    CHECK(read(old.install / "manifests/runtime.txt") == "0.2.0\n");
+    CHECK(!fs::exists(old.install / "runtime/0.2.1"));
+}
+
+TEST(runtime_update_retries_each_inactive_publication_state)
+{
+    for (const unsigned reached : {0u, 1u, 2u, 3u})
+    {
+        fixture old("0.2.0"), next("0.2.1");
+        CHECK(parts::stage_bundled_runtime(old.bundle, old.install, old.version));
+        if (reached >= 1) fs::copy(next.bundle / "manifests/0.2.1", old.install / "manifests/0.2.1", fs::copy_options::recursive);
+        if (reached >= 2) fs::copy(next.bundle / "runtime/0.2.1", old.install / "runtime/0.2.1", fs::copy_options::recursive);
+        if (reached >= 3) write(old.install / "manifests/runtime-history/0.2.1.txt", "0.2.0\n");
+        std::string details;
+        CHECK(read(old.install / "manifests/runtime.txt") == "0.2.0\n");
+        CHECK(parts::verify_play_runtime(parts::read_runtime(old.install), next.version, details));
+        if (reached >= 2)
+        {
+            const auto file = old.install / "runtime/0.2.1/server/olserver.py";
+            write(file, "bad");
+            CHECK(!parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update).empty());
+            CHECK(read(file) == "bad" && read(old.install / "manifests/runtime.txt") == "0.2.0\n");
+            write(file, "abc");
+        }
+        CHECK(parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update).empty());
+        CHECK(read(old.install / "manifests/runtime.txt") == "0.2.1\n");
+    }
+}
+
+TEST(runtime_rollback_refuses_an_older_server_after_the_floor_advances)
+{
+    fixture old("0.2.0"), next("0.2.1");
+    CHECK(parts::stage_bundled_runtime(old.bundle, old.install, old.version));
+    CHECK(parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update).empty());
+    CHECK(parts::remember_server_state_version(old.install, next.version));
+    const auto status = parts::inspect_bundled_runtime(next.bundle, old.install, next.version);
+    CHECK(status.rollback_version.empty() && status.rollback_blocked);
+    CHECK(!parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::rollback).empty());
+    CHECK(read(old.install / "manifests/runtime.txt") == "0.2.1\n");
+}
+
+TEST(runtime_update_leaves_the_active_slot_when_the_marker_cannot_be_replaced)
+{
+    fixture old("0.2.0"), next("0.2.1");
+    CHECK(parts::stage_bundled_runtime(old.bundle, old.install, old.version));
+    const auto marker = old.install / "manifests/runtime.txt";
+    {
+        const show23::input_paths::handle lock(CreateFileW(marker.c_str(), GENERIC_READ, FILE_SHARE_READ,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        CHECK(lock);
+        if (!lock) return;
+        CHECK(!parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update).empty());
+        CHECK(read(marker) == "0.2.0\n");
+        CHECK(fs::is_directory(old.install / "runtime/0.2.1"));
+    }
+    CHECK(parts::change_runtime(next.bundle, old.install, next.version, parts::runtime_change::update).empty());
+    CHECK(read(marker) == "0.2.1\n");
 }
 
 TEST(play_verification_requires_listed_engine_files_and_checks_their_hashes)

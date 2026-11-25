@@ -27,6 +27,7 @@ namespace show23
         bool fullscreen{};
         std::string player_name;
         resolution display_resolution = default_resolution;
+        std::string server_version;
     };
 
     struct play_options

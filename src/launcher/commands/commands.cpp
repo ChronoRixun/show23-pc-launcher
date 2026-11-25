@@ -149,7 +149,8 @@ namespace commands
                         show23::card_import_result outcome{"runtime"};
                         try
                         {
-                            const auto runtime = parts::read_runtime(install);
+                            const parts::runtime_lease lease(install, false);
+                            const auto runtime = lease ? parts::read_runtime(install) : parts::installed_runtime{};
                             std::string message;
                             if (parts::verify_card_import_runtime(runtime, launcher_update::running_version(), message))
                             {
@@ -277,79 +278,6 @@ namespace commands
             report.stages.front() = {show23::stage_state::failed, {{id, show23::finding_state::failed, {}}}};
             return report;
         }
-        struct update_state
-        {
-            std::mutex mutex;
-            bool busy{};
-            unsigned generation{};
-            std::array<release_channel::outcome, 3> releases;
-            std::chrono::system_clock::time_point checked;
-        };
-        update_state updates;
-
-        void write_part_release(rapidjson::Value& row, rapidjson::Document::AllocatorType& allocator,
-                                const release_channel::outcome& outcome, const std::string& installed, const bool busy)
-        {
-            const char* state = busy ? "checking" : "idle";
-            if (outcome.chosen)
-            {
-                const auto& version = outcome.chosen->version;
-                state = outcome.from_cache ? "cached" : release_channel::compare(version, installed) > 0 || installed.empty() ?
-                    "available" : "up-to-date";
-                row.AddMember("availableVersion", json(version, allocator), allocator);
-            }
-            else if (!outcome.error.empty())
-            {
-                state = outcome.unpublished ? "unpublished" : "error";
-            }
-            row.AddMember("state", rapidjson::StringRef(state), allocator);
-            row.AddMember("status", json(outcome.error, allocator), allocator);
-        }
-
-        void check_parts()
-        {
-            if (utils::flags::has_flag("offline")) return;
-            const auto channel = release_source::current_channel();
-            unsigned generation;
-            {
-                std::lock_guard lock(updates.mutex);
-                if (updates.busy) return;
-                updates.busy = true;
-                generation = updates.generation;
-                updates.releases.fill({});
-            }
-            try
-            {
-                std::thread([channel, generation]
-                {
-                    std::array<release_channel::outcome, 3> releases;
-                    try
-                    {
-                        const auto shared = release_source::resolve_shared_parts(channel);
-                        releases = {release_channel::outcome{}, shared[0], shared[1]};
-                    }
-                    catch (const std::exception&)
-                    {
-                        for (auto& release : releases) release.error = "Could not check for updates.";
-                    }
-
-                    std::lock_guard lock(updates.mutex);
-                    if (generation == updates.generation)
-                    {
-                        updates.releases = std::move(releases);
-                        updates.checked = std::chrono::system_clock::now();
-                    }
-                    updates.busy = false;
-                }).detach();
-            }
-            catch (...)
-            {
-                std::lock_guard lock(updates.mutex);
-                updates.busy = false;
-                for (auto& release : updates.releases) release.error = "Could not start the update check.";
-            }
-        }
-
         void register_settings(cef::cef_ui& ui)
         {
             ui.add_command("use-this-copy", [](const auto&, rapidjson::Document& response)
@@ -425,12 +353,6 @@ namespace commands
                         response.SetBool(false);
                         return;
                     }
-                    {
-                        std::lock_guard lock(updates.mutex);
-                        ++updates.generation;
-                        updates.releases.fill({});
-                        updates.checked = {};
-                    }
                 }
                 else
                 {
@@ -500,19 +422,14 @@ namespace commands
             ui.add_command("check-parts", [](const auto&, rapidjson::Document& response)
             {
                 launcher_update::check();
-                check_parts();
                 response.SetBool(!utils::flags::has_flag("offline"));
             });
             ui.add_command("get-parts", [](const auto&, rapidjson::Document& response)
             {
                 const auto runtime = parts::installed();
                 const auto bundle = parts::read_runtime(bundle_root());
-                std::lock_guard lock(updates.mutex);
                 response.SetObject();
                 auto& a = response.GetAllocator();
-                response.AddMember("busy", updates.busy, a);
-                const auto checked = std::chrono::duration_cast<std::chrono::milliseconds>(updates.checked.time_since_epoch()).count();
-                response.AddMember("checkedAt", static_cast<std::int64_t>(checked), a);
                 rapidjson::Value rows(rapidjson::kArrayType);
                 for (const auto part : parts::all)
                 {
@@ -524,26 +441,50 @@ namespace commands
                     row.AddMember("part", rapidjson::StringRef(parts::name(part)), a);
                     row.AddMember("version", json(version, a), a);
                     row.AddMember("prerelease", release_channel::is_prerelease(version), a);
-                    if (index)
-                    {
-                        auto outcome = updates.releases[index - 1];
-                        if (part == parts::id::emulator)
-                        {
-                            outcome = {};
-                            outcome.unpublished = true;
-                        }
-                        if (outcome.unpublished && (!runtime.error.empty() || !bundle.error.empty()))
-                        {
-                            outcome.unpublished = false;
-                            outcome.error = runtime.error.empty() ? bundle.error : runtime.error;
-                        }
-                        row.AddMember("bundled", outcome.unpublished && parts::has_bundled_part(bundle, part), a);
-                        write_part_release(row, a, outcome, version, updates.busy);
-                    }
+                    if (part != parts::id::launcher)
+                        row.AddMember("bundled", installed.has_value() || parts::has_bundled_part(bundle, part), a);
                     rows.PushBack(row, a);
                 }
                 response.AddMember("parts", rows, a);
             });
+        }
+
+        bool start_runtime_change(std::optional<parts::runtime_change> action, std::string target)
+        {
+            std::lock_guard lock(verify.mutex);
+            const auto install = show23::install_folder();
+            if (!install || runtime_target != install || !versioned_start::unlocked() || play_active() ||
+                importing_cards || setup_busy || verify.busy || runtime_worker_busy) return false;
+            if (action ? target != (*action == parts::runtime_change::update ? runtime_status.update_version :
+                runtime_status.rollback_version) : !runtime_status.repairable) return false;
+            repair_busy = runtime_worker_busy = true;
+            repair_success = false;
+            repair_error.clear();
+            try
+            {
+                runtime_worker = std::jthread([install = *install, action, target = std::move(target)]
+                {
+                    std::string error;
+                    parts::runtime_check checked;
+                    try
+                    {
+                        const auto version = launcher_update::running_version();
+                        const auto bundle = bundle_root();
+                        error = action ? parts::change_runtime(bundle, install, version, *action, target) :
+                            parts::repair_bundled_runtime(bundle, install, version);
+                        checked = parts::inspect_bundled_runtime(bundle, install, version);
+                    }
+                    catch (...) { error = "Could not change the runtime."; }
+                    std::lock_guard completed(verify.mutex);
+                    runtime_status = std::move(checked);
+                    repair_success = error.empty();
+                    repair_error = std::move(error);
+                    repair_busy = runtime_worker_busy = false;
+                });
+                return true;
+            }
+            catch (...) { repair_busy = runtime_worker_busy = false; }
+            return false;
         }
 
         void register_game(cef::cef_ui& ui)
@@ -568,7 +509,13 @@ namespace commands
                     response.AddMember("ready", current && runtime_status.ready, a);
                     response.AddMember("runtimeFresh", current && runtime_status.fresh, a);
                     response.AddMember("runtimeRepairable", current && runtime_status.repairable, a);
-                    response.AddMember("runtimeInUse", in_use, a);
+                    response.AddMember("runtimeInUse", in_use || repair_busy, a);
+                    if (current)
+                    {
+                        response.AddMember("runtimeUpdateVersion", json(runtime_status.update_version, a), a);
+                        response.AddMember("runtimeRollbackVersion", json(runtime_status.rollback_version, a), a);
+                        response.AddMember("runtimeRollbackBlocked", runtime_status.rollback_blocked, a);
+                    }
                     if (current && !runtime_status.ready && !runtime_status.fresh)
                         response.AddMember("runtimeError", json(runtime_status.message, a), a);
                 }
@@ -585,38 +532,19 @@ namespace commands
 
             ui.add_command("repair-runtime", [](const auto&, rapidjson::Document& response)
             {
-                std::lock_guard lock(verify.mutex);
-                const auto install = show23::install_folder();
-                response.SetBool(false);
-                if (!install || runtime_target != install || !runtime_status.repairable || play_active() ||
-                    importing_cards || setup_busy || verify.busy || runtime_worker_busy) return;
-                // The repair worker takes the exclusive lease before it reads or changes the slot.
-                repair_busy = runtime_worker_busy = true;
-                repair_success = false;
-                repair_error.clear();
-                try
+                response.SetBool(start_runtime_change(std::nullopt, {}));
+            });
+            ui.add_command("change-runtime", [](const auto& value, rapidjson::Document& response)
+            {
+                const auto operation = string(value, "operation");
+                const auto target = string(value, "version");
+                if ((operation != "update" && operation != "rollback") || target.empty())
                 {
-                    runtime_worker = std::jthread([install = *install]
-                    {
-                        std::string error;
-                        parts::runtime_check checked;
-                        try
-                        {
-                            const auto version = launcher_update::running_version();
-                            const auto bundle = bundle_root();
-                            error = parts::repair_bundled_runtime(bundle, install, version);
-                            checked = parts::inspect_bundled_runtime(bundle, install, version);
-                        }
-                        catch (...) { error = "Could not repair the runtime."; }
-                        std::lock_guard completed(verify.mutex);
-                        runtime_status = std::move(checked);
-                        repair_success = error.empty();
-                        repair_error = std::move(error);
-                        repair_busy = runtime_worker_busy = false;
-                    });
-                    response.SetBool(true);
+                    response.SetBool(false);
+                    return;
                 }
-                catch (...) { repair_busy = runtime_worker_busy = false; }
+                response.SetBool(start_runtime_change(operation == "update" ? parts::runtime_change::update :
+                    parts::runtime_change::rollback, target));
             });
             ui.add_command("get-runtime-repair", [](const auto&, rapidjson::Document& response)
             {
@@ -781,7 +709,7 @@ namespace commands
                                         const show23::play_request request{*install, game.record->base.path,
                                             server.python, server.script, engine,
                                             utils::properties::load(property_keys::FULLSCREEN) == "true", name,
-                                            saved_resolution()};
+                                            saved_resolution(), runtime.manifests[parts::index(parts::id::server)]->version};
                                         show23::play_options options;
                                         options.stop = [] { return play_stop.load(); };
                                         options.phase = [](auto phase)
@@ -796,8 +724,7 @@ namespace commands
                         }
                         catch (...) {}
                         std::lock_guard completed(verify.mutex);
-                        if (verified) { runtime_status = {}; runtime_status.ready = true; }
-                        else runtime_target.reset(); // Reinspect after a failed start or incomplete stage.
+                        runtime_target.reset(); // Play may have advanced the server-state floor.
                         last_play = play_stop.load() ? show23::play_result{"stopped"} : std::move(outcome);
                         play_status = idle;
                     });

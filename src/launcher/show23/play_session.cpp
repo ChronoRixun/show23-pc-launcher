@@ -3,6 +3,7 @@
 #include "play_session.hpp"
 #include "child_process.hpp"
 #include "card_import.hpp"
+#include "updater/part_store.hpp"
 
 #include <iphlpapi.h>
 #include <utils/string.hpp>
@@ -260,9 +261,12 @@ namespace show23
             if (!plain_file(generated) || !generated.length) return {"certificate", 0, tail(log)};
         }
 
-        phase(play_phase::server);
+        if (stopped()) return {"stopped"};
         const auto server_log = logs.path / ("server-console-" + suffix);
         child_process server;
+        if (!parts::remember_server_state_version(request.install, request.server_version))
+            return {"runtime", 0, "Could not record the local server's progress version."};
+        phase(play_phase::server);
         if (!run_server(server, L"run", server_log)) return {"serverLaunch"};
         const auto deadline = clock::now() + options.ready_timeout;
         while (!stopped() && server.running() && clock::now() < deadline)

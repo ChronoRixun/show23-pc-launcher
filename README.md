@@ -24,7 +24,7 @@ The release includes Setup, Play, Diamond Dynasty against the local server and o
 
 **Verify Files** checks the game folders and the installed runtime when Play is stopped.
 
-Use a fresh ZIP extraction and a new game install folder for this release. You can reuse your unpacked game files. The previous release remains available on the Releases page if you prefer the previous engine.
+The first native release, 0.2.0, used a fresh ZIP and a new game install. Native installs from 0.2.0 can update in place. Earlier releases remain available on the Releases page.
 
 ### Play
 
@@ -111,7 +111,9 @@ Before publishing, fill in the corresponding-source link in `tools/engine-source
 
 ### Update channels
 
-Stable selects final native releases and Beta includes native pre-releases. **Settings > Updates** lists the launcher, game engine, server and profile. The game engine ships with the launcher bundle. Setup stages the bundle into a fresh game install. **Repair runtime** can restore the active slot from a matching bundle while Play is stopped. Later launcher updates can replace the launcher version while keeping the active game runtime. See [Release manifests](docs/release-manifest.md).
+Stable selects final native releases and Beta includes native pre-releases. The game engine, local server and profile arrive in the launcher download. After updating and restarting the launcher, stop Play and choose **Update game files** on Home or in **Settings > Updates**. Activation keeps your game install, saves, settings, and Diamond Dynasty progress. **Verify Files** checks the selected slot.
+
+**Restore previous game files** in Settings is available while the retained version is compatible with your progress. Starting a newer local server can close that rollback window. **Repair runtime** restores damaged files from a matching bundle. See [Release manifests](docs/release-manifest.md).
 
 ## Privacy
 
@@ -120,7 +122,6 @@ The launcher does not send game paths, game files, saves, content packs or diagn
 | Address | When |
 | --- | --- |
 | `https://api.github.com/repos/ChronoRixun/show23-pc-launcher/releases/latest` on Stable, or `https://api.github.com/repos/ChronoRixun/show23-pc-launcher/releases?per_page=30` on Beta | Startup for tagged release builds, a channel change, or a player-requested update check |
-| `https://api.github.com/repos/ChronoRixun/show23-pc/releases?per_page=30` | When the player chooses Check for updates. The server and profile share the listing |
 | `https://github.com/ChronoRixun/show23-pc-launcher/releases/download/<tag>/<asset>` | After the player approves an update. Assets are `launcher.json`, `SHA256SUMS.txt` and `show23-pc-<version>-win64-native-portable.zip` |
 | `https://release-assets.githubusercontent.com/…` and `https://objects.githubusercontent.com/…` | When GitHub redirects a release asset download |
 | `https://github.com/ChronoRixun/show23-pc-launcher/releases/tag/v<version>` | Opens the offered version's release page in the default browser when requested from the updater |

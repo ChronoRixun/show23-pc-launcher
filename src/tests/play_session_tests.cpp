@@ -73,6 +73,7 @@ namespace
             root = fs::current_path() / "build" / ("play fixture " + std::to_string(GetCurrentProcessId()) +
                 " " + std::to_string(GetTickCount64()) + " " + std::to_string(++serial));
             request.install = root / "install path";
+            request.server_version = "0.2.1";
             request.base = root / "base path";
             request.server = root / "server directory" / "olserver.py";
             request.python = request.server.parent_path() / "fake-server.exe";
@@ -84,6 +85,7 @@ namespace
             write(request.engine / "bbport.ini", "default config");
             write(request.engine / "input.ini", "default input");
             fs::create_directories(request.install / "data/logs");
+            fs::create_directories(request.install / "manifests");
             fs::create_directories(request.install / "data/profiles/default/server");
             write(request.base / "eboot.bin", "fixture");
             write(request.server, "fixture");
@@ -227,6 +229,9 @@ TEST(play_generates_the_ca_uses_exact_arguments_and_stops_server_after_success)
     const auto result = run_play(f.request, f.options);
     CHECK(result.message == std::string_view("finished"));
     CHECK(fs::exists(f.ca()));
+    std::string floor;
+    std::ifstream(f.request.install / "manifests/server-state-version.txt") >> floor;
+    CHECK(floor == f.request.server_version);
     CHECK(f.terminated("server-pid"));
     CHECK(f.terminated("engine-pid"));
     CHECK(f.terminated("prepare-pid"));
@@ -353,4 +358,5 @@ TEST(play_stop_terminates_preparation_without_starting_the_server)
     CHECK(result.message == std::string_view("stopped"));
     CHECK(f.terminated("prepare-pid"));
     CHECK(!f.pid("server-pid") && !fs::exists(f.ca()));
+    CHECK(!fs::exists(f.request.install / "manifests/server-state-version.txt"));
 }

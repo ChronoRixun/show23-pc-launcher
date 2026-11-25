@@ -49,7 +49,7 @@ namespace parts
         const auto saved = server_state_version(install);
         if (!saved || !is_version(server_version)) return "The local server state version could not be verified.";
         if (!saved->empty() && release_channel::compare(server_version, *saved) < 0)
-            return "This install is reserved for a newer local server. Choose a fresh install folder.";
+            return "This install is reserved for a newer local server. Select a compatible runtime.";
         return {};
     }
 

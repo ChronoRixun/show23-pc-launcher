@@ -91,6 +91,12 @@
         const repair = $('repair-runtime');
         repair.hidden = !game.runtimeRepairable || locked;
         repair.disabled = active || game.runtimeInUse || state.repairing || state.cards.busy || state.setupBusy || locked;
+        for (const id of ['update-runtime', 'settings-update-runtime', 'settings-rollback-runtime']) {
+            const version = id === 'settings-rollback-runtime' ? game.runtimeRollbackVersion : game.runtimeUpdateVersion;
+            $(id).hidden = !version || locked;
+            $(id).disabled = repair.disabled || state.startingPlay;
+        }
+        status('settings-runtime-note', game.runtimeRollbackBlocked ? t('runtimeChange.blocked') : '');
         const updateAction = $('launcher-update-action');
         if (window.LauncherUpdate.status?.state === 'ready') updateAction.disabled = restartBlocked();
         $('play').disabled = !canPlay || locked || active || state.startingPlay || state.cards.busy ||
@@ -145,11 +151,12 @@
     }
 
     function watchRepairAvailability() {
-        if (state.watchingRepair || !state.game.runtimeRepairable) return;
+        const available = () => state.game.runtimeRepairable || state.game.runtimeUpdateVersion || state.game.runtimeRollbackVersion;
+        if (state.watchingRepair || !available()) return;
         state.watchingRepair = true;
         void (async () => {
             try {
-                while (state.game.runtimeRepairable) {
+                while (available()) {
                     await sleep(1000);
                     if (state.repairing || state.setupBusy) continue;
                     const latest = await run('get-show23');
@@ -163,17 +170,28 @@
         })().catch(console.error);
     }
 
-    async function repairRuntime() {
-        if ($('repair-runtime').disabled || $('repair-runtime').hidden) return;
-        const confirm = await window.showMessageBox(t('runtimeRepair.button'), t('runtimeRepair.confirm'),
-            [{ label: t('common.cancel'), cancel: true }, t('runtimeRepair.button')]);
-        if (confirm !== 1) return;
+    async function changeRuntime(button, operation = 'repair') {
+        if ($(button).disabled || $(button).hidden) return;
+        const repair = operation === 'repair';
+        const version = operation === 'update' ? state.game.runtimeUpdateVersion : state.game.runtimeRollbackVersion;
+        const key = repair ? 'runtimeRepair.button' : 'runtimeChange.' + operation;
+        const prompt = repair ? 'runtimeRepair.confirm' : 'runtimeChange.confirm.' + operation;
+        const confirm = await window.showMessageBox(t(key), t(prompt, { version }),
+            [{ label: t('common.cancel'), cancel: true }, t(key)]);
+        if (confirm !== 1 || state.repairing || $(button).disabled || $(button).hidden) return;
+        const output = (text) => {
+            if (repair) status('runtime-repair-result', text);
+            else {
+                status('runtime-update-result', text);
+                status('settings-runtime-result', text);
+            }
+        };
         state.repairing = true;
         paintHome();
-        status('runtime-repair-result', t('runtimeRepair.working'));
+        output(t(repair ? 'runtimeRepair.working' : 'runtimeChange.working'));
         try {
-            if (!await run('repair-runtime')) {
-                status('runtime-repair-result', t('runtimeRepair.inUse'));
+            if (!await (repair ? run('repair-runtime') : run('change-runtime', { operation, version }))) {
+                output(t('runtimeRepair.inUse'));
                 return;
             }
             let result;
@@ -182,9 +200,9 @@
                 if (!result?.busy) break;
                 await sleep(250);
             } while (true);
-            status('runtime-repair-result', result?.success ? t('runtimeRepair.repaired') :
+            output(result?.success ? t(repair ? 'runtimeRepair.repaired' : 'runtimeChange.done.' + operation, { version }) :
                 result?.error === 'in-use' ? t('runtimeRepair.inUse') :
-                    t('runtimeRepair.failed', { detail: result?.error || '' }));
+                    t(repair ? 'runtimeRepair.failed' : 'runtimeChange.failed', { detail: result?.error || '' }));
         } finally {
             state.repairing = false;
             await gameState();
@@ -610,13 +628,12 @@
 
     function getPartStatus(item) {
         const launcher = window.LauncherUpdate.status;
-        if (window.IS_OFFLINE) return { text: t('launcherUpdate.offline'), tone: '' };
         const own = item.part === 'launcher';
+        if (!own && item.bundled)
+            return { tone: 'ok', text: t('settings.included'), hint: t('settings.bundledDownload') };
+        if (window.IS_OFFLINE) return { text: t('launcherUpdate.offline'), tone: '' };
         const info = own ? launcher : item;
         const noRelease = /^(No release has been published|No release with all its files has been published)/i;
-        if (!own && info.state === 'unpublished' && item.bundled) {
-            return { tone: 'ok', text: t('settings.included'), hint: t('settings.bundledDownload') };
-        }
         if (info?.state === 'unpublished' || (own && noRelease.test(info?.error || info?.status || ''))) {
             return { tone: '', text: t('settings.noRelease') };
         }
@@ -1062,7 +1079,10 @@
                 paintHome();
             }
         });
-        bind('repair-runtime', 'click', repairRuntime);
+        bind('repair-runtime', 'click', () => changeRuntime('repair-runtime'));
+        bind('update-runtime', 'click', () => changeRuntime('update-runtime', 'update'));
+        bind('settings-update-runtime', 'click', () => changeRuntime('settings-update-runtime', 'update'));
+        bind('settings-rollback-runtime', 'click', () => changeRuntime('settings-rollback-runtime', 'rollback'));
         bind('retry-launcher-version', 'click', () => window.LauncherUpdate.retry());
         bind('stop-play', 'click', async () => {
             if (await run('stop-play')) $('stop-play').disabled = true;

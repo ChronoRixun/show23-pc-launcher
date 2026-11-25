@@ -164,7 +164,7 @@ namespace
         launcher_update::stop();
     }
 
-    enum class manual_action { setup, play, import_cards };
+    enum class manual_action { setup, play, import_cards, update_runtime };
 
     int run_manual(manual_action action)
     {
@@ -243,6 +243,15 @@ namespace
         const auto game_record = show23::input_paths::inspect(install / "data/games/CUSA35521/game.json");
         if (!game_record.present || game_record.directory || game_record.error != show23::input_paths::path_error::none)
             return error("Run setup for this install folder first.");
+        if (action == manual_action::update_runtime)
+        {
+            const auto rollback = count == 4 && std::wstring_view(args[3]) == L"--rollback";
+            if (count != 3 && !rollback) return error("Give an install folder and optional --rollback.");
+            const auto result = parts::change_runtime(layout.release, install, version,
+                rollback ? parts::runtime_change::rollback : parts::runtime_change::update);
+            if (result == "in-use") return error("Stop Play and close card import before changing the runtime.");
+            return result.empty() ? 0 : error(result);
+        }
         if (!parts::stage_bundled_runtime(layout.release, install, version))
             return error(parts::inspect_bundled_runtime(layout.release, install, version).message);
         const parts::runtime_lease lease(install, false);
@@ -262,6 +271,8 @@ namespace
         }
         const auto script = manual_script(runtime);
         if (script.empty()) return error("The active runtime is missing its manual play script.");
+        if (!parts::remember_server_state_version(install, runtime.manifests[parts::index(parts::id::server)]->version))
+            return error("Could not record the local server's progress version.");
         std::vector<std::wstring> command{L"-B", L"-X", L"utf8", L"-u", script.native(), L"play", install.native()};
         for (int i = 3; i < count; ++i) command.emplace_back(args[i]);
         return launch(runtime, command);
@@ -300,7 +311,8 @@ namespace
         const auto action = setting("SHOW23_FIXTURE_ACTION");
         if (action == "confirm") return 0;
         const auto install = std::filesystem::path(setting("SHOW23_FIXTURE_INSTALL"));
-        if (action == "stage" || action == "inspect-runtime" || action == "repair")
+        if (action == "stage" || action == "inspect-runtime" || action == "repair" ||
+            action == "activate-runtime" || action == "verify-runtime")
         {
             const auto relative = install.lexically_relative(data.parent_path());
             if (relative.empty() || relative == "." || *relative.begin() == ".." ||
@@ -314,6 +326,25 @@ namespace
                 error = parts::repair_bundled_runtime(bundle, install, current);
                 ok = error.empty();
             }
+            if (action == "activate-runtime")
+            {
+                error = parts::change_runtime(bundle, install, current, parts::runtime_change::update);
+                ok = error.empty();
+            }
+            if (action == "verify-runtime")
+            {
+                ok = parts::verify_play_runtime(parts::read_runtime(install), current, error);
+                const auto game = show23::inspect_game(install);
+                if (game.state != show23::record_state::ready) ok = false;
+                else
+                {
+                    const auto findings = show23::verify_recorded_game(*game.record);
+                    ok = ok && !findings.empty() && std::ranges::none_of(findings, [](const auto& finding)
+                    {
+                        return finding.state == show23::finding_state::failed;
+                    });
+                }
+            }
             const auto status = parts::inspect_bundled_runtime(bundle, install, current);
             rapidjson::Document doc(rapidjson::kObjectType);
             auto& allocator = doc.GetAllocator();
@@ -322,6 +353,8 @@ namespace
             doc.AddMember("repairable", status.repairable, allocator);
             doc.AddMember("inUse", parts::runtime_in_use(install), allocator);
             doc.AddMember("ok", ok, allocator);
+            doc.AddMember("update", rapidjson::Value(status.update_version.c_str(), allocator), allocator);
+            doc.AddMember("rollback", rapidjson::Value(status.rollback_version.c_str(), allocator), allocator);
             const auto& message = error.empty() ? status.message : error;
             doc.AddMember("message", rapidjson::Value(message.c_str(), allocator), allocator);
             rapidjson::StringBuffer buffer;
@@ -435,6 +468,7 @@ int CALLBACK WinMain(const HINSTANCE instance, HINSTANCE, LPSTR, int)
         if (utils::flags::has_flag("-manual-play")) return run_manual(manual_action::play);
         if (utils::flags::has_flag("-manual-setup")) return run_manual(manual_action::setup);
         if (utils::flags::has_flag("-manual-import")) return run_manual(manual_action::import_cards);
+        if (utils::flags::has_flag("-manual-update")) return run_manual(manual_action::update_runtime);
         if (is_subprocess())
         {
             set_working_directory();

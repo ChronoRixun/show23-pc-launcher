@@ -36,7 +36,12 @@ namespace parts
         bool fresh{}; // Setup or Play can stage, or finish an interrupted fresh stage.
         bool repairable{};
         std::string message;
+        std::string update_version;
+        std::string rollback_version;
+        bool rollback_blocked{};
     };
+
+    enum class runtime_change { update, rollback };
 
     // Uses only the current runtime and its manifests. Invalid metadata fails closed.
     installed_runtime installed();
@@ -49,6 +54,9 @@ namespace parts
                                           std::string_view launcher_version);
     bool stage_bundled_runtime(const std::filesystem::path& bundle, const std::filesystem::path& install,
                                std::string_view launcher_version);
+    // Empty on success. A version supplied by the caller binds the confirmation to its offer.
+    std::string change_runtime(const std::filesystem::path& bundle, const std::filesystem::path& install,
+                               std::string_view launcher_version, runtime_change action, std::string_view expected = {});
     // Empty on success, "in-use" if leased, an active-slot image is running, or a replacement is blocked by a lock.
     std::string repair_bundled_runtime(const std::filesystem::path& bundle, const std::filesystem::path& install,
                                        std::string_view launcher_version);
@@ -58,7 +66,7 @@ namespace parts
     std::string play_layout_error(const installed_runtime& runtime);
     bool verify_play_runtime(const installed_runtime& runtime, std::string_view launcher_version, std::string& message);
     std::string server_state_error(const std::filesystem::path& install, std::string_view server_version);
-    // Caller holds the exclusive runtime lease while activating a staged runtime.
+    // Caller holds the exclusive lease, or a shared lease and the Play activity lock.
     bool remember_server_state_version(const std::filesystem::path& install, std::string_view server_version);
 
     bool ready(const installed_runtime& runtime);
