@@ -129,7 +129,7 @@ def copy_engine(package_root, target, notices):
 
 def copy_server(source, target, manual_mode):
     files = tree(source)
-    roots = {"python", "vendor", "tables", "replies"}
+    roots = {"python", "vendor", "tables", "replies", "content"}
     for name, path in files.items():
         if name not in SERVER_REQUIRED | {"manual_mode.py", "LICENSE", "LICENSE.txt"} and name.split("/")[0] not in roots:
             raise ValueError(f"Unexpected file in the staged server: {name}")
