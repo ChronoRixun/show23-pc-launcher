@@ -37,7 +37,7 @@ Known limits
 - The Captain card feature is unverified.
 - About 211 special cards are left out because they could not be matched to a roster player.
 - Choice packs are not supported.
-- If you already use a native install from 0.2.0 onward, update the launcher in place. After restarting, choose Update game files on Home or in Settings. Your install and progress stay in place.
+- If you already use a native install from 0.2.0 onward, update the launcher in place. After restarting, choose Update engine and server on Home or in Settings. Your install and progress stay in place.
 - Trophy tracking is off.
 
 Problems

@@ -981,7 +981,7 @@ test('runtime update is confirmed once from Settings and reports the activated v
     assert.equal(requests.length, 1);
     assert.equal(requests[0].payload.version, '0.2.1');
     assert.equal(requests[0].payload.operation, 'update');
-    assert.match(view.id('settings-runtime-result').textContent, /Updated game files to 0\.2\.1/);
+    assert.match(view.id('settings-runtime-result').textContent, /Updated the engine and server to 0\.2\.1/);
     assert.equal(view.id('settings-update-runtime').hidden, true);
     assert.equal(view.id('settings-rollback-runtime').hidden, false);
 });

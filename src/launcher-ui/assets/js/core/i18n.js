@@ -2,19 +2,19 @@
     const translations = {
         "en": {
             "runtimeChange": {
-                "update": "Update game files",
-                "rollback": "Restore previous game files",
+                "update": "Update engine and server",
+                "rollback": "Restore previous engine and server",
                 "confirm": {
-                    "update": "Update the game files to {{version}}? Saves, progress and settings stay in place.",
-                    "rollback": "Restore game files from {{version}}? Saves, progress and settings stay in place."
+                    "update": "Update the game engine and local server to {{version}}? Saves, progress and settings stay in place.",
+                    "rollback": "Restore the game engine and local server from {{version}}? Saves, progress and settings stay in place."
                 },
-                "working": "Preparing verified game files…",
+                "working": "Preparing the verified engine and server…",
                 "done": {
-                    "update": "Updated game files to {{version}}.",
-                    "rollback": "Restored game files from {{version}}."
+                    "update": "Updated the engine and server to {{version}}.",
+                    "rollback": "Restored the engine and server from {{version}}."
                 },
-                "failed": "Could not change the game files. {{detail}}",
-                "blocked": "The newer server has been started. Restoring the previous game files could overwrite progress."
+                "failed": "Could not change the engine and server. {{detail}}",
+                "blocked": "The newer server has been started. Restoring the previous engine and server could overwrite progress."
             },
             "runtimeRepair": {
                 "button": "Repair runtime",

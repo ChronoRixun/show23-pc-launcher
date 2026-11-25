@@ -111,9 +111,9 @@ Before publishing, fill in the corresponding-source link in `tools/engine-source
 
 ### Update channels
 
-Stable selects final native releases and Beta includes native pre-releases. The game engine, local server and profile arrive in the launcher download. After updating and restarting the launcher, stop Play and choose **Update game files** on Home or in **Settings > Updates**. Activation keeps your game install, saves, settings, and Diamond Dynasty progress. **Verify Files** checks the selected slot.
+Stable selects final native releases and Beta includes native pre-releases. The game engine, local server and profile arrive in the launcher download. After updating and restarting the launcher, stop Play and choose **Update engine and server** on Home or in **Settings > Updates**. Activation keeps your game install, saves, settings, and Diamond Dynasty progress. **Verify Files** checks the selected slot.
 
-**Restore previous game files** in Settings is available while the retained version is compatible with your progress. Starting a newer local server can close that rollback window. **Repair runtime** restores damaged files from a matching bundle. See [Release manifests](docs/release-manifest.md).
+**Restore previous engine and server** in Settings is available while the retained version is compatible with your progress. Starting a newer local server can close that rollback window. **Repair runtime** restores damaged files from a matching bundle. See [Release manifests](docs/release-manifest.md).
 
 ## Privacy
 
