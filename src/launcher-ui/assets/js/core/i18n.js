@@ -422,6 +422,8 @@
             "settings": {
                 "title": "Settings",
                 "game": "Game",
+                "unlockAllCards": "Unlock all cards",
+                "unlockAllCardsHelp": "Play with every card in the local catalogue. Earned cards and progress stay yours. Turning this off restores your regular lineup. Applies the next time you Play.",
                 "setupFiles": "Setup and files",
                 "launcherGroup": "Launcher",
                 "language": "Language",
@@ -872,6 +874,8 @@
             "settings": {
                 "title": "Paramètres",
                 "game": "Jeu",
+                "unlockAllCards": "Débloquer toutes les cartes",
+                "unlockAllCardsHelp": "Jouez avec toutes les cartes du catalogue local. Vos cartes gagnées et votre progression sont conservées. Désactiver cette option rétablit votre alignement habituel. S’applique au prochain lancement du jeu.",
                 "setupFiles": "Installation et fichiers",
                 "launcherGroup": "Lanceur",
                 "language": "Langue",
@@ -1404,6 +1408,8 @@
             "settings": {
                 "title": "Ajustes",
                 "game": "Juego",
+                "unlockAllCards": "Desbloquear todas las cartas",
+                "unlockAllCardsHelp": "Juega con todas las cartas del catálogo local. Conservas las cartas ganadas y tu progreso. Al desactivar esta opción, se restaura tu alineación habitual. Se aplica la próxima vez que inicies el juego.",
                 "setupFiles": "Instalación y archivos",
                 "launcherGroup": "Iniciador",
                 "language": "Idioma",
@@ -1869,6 +1875,8 @@
             "settings": {
                 "title": "Настройки",
                 "game": "Игра",
+                "unlockAllCards": "Разблокировать все карты",
+                "unlockAllCardsHelp": "Играйте со всеми картами локального каталога. Заработанные карты и прогресс сохраняются. При отключении вернётся ваш обычный состав. Изменение вступит в силу при следующем запуске игры.",
                 "setupFiles": "Установка и файлы",
                 "launcherGroup": "Лаунчер",
                 "language": "Язык",

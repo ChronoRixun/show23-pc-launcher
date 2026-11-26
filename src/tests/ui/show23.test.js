@@ -713,7 +713,7 @@ if (process.env.SHOW23_CARD_UI_EVIDENCE === '1') {
 
 test('Settings groups controls by the player tasks in every language', async () => {
     const expected = [
-        ['settings-game', ['player-name', 'resolution', 'fullscreen']],
+        ['settings-game', ['player-name', 'resolution', 'fullscreen', 'unlock-all-cards']],
         ['settings-updates', ['channel', 'parts', 'check-parts']],
         ['settings-setup', ['settings-unpacker-path', 'location', 'switch-mode']],
         ['settings-launcher', ['offline', 'language', 'use-this-copy']]
@@ -768,6 +768,35 @@ test('Resolution defaults to 1080p and saves either choice', async () => {
     await view.clock.advance(0);
     assert.equal(resolution, '1080p');
     assert.equal(choice.value, '1080p');
+});
+
+test('Unlock all cards defaults off and writes the selected profile setting', async () => {
+    let unlockAllCards = false;
+    const view = open({
+        'get-settings': () => ({ language: 'en', unlockAllCardsAvailable: true, unlockAllCards }),
+        'save-setting': (_requests, payload) => {
+            assert.equal(payload.key, 'unlockAllCards');
+            assert.ok(payload.value === 'true' || payload.value === 'false');
+            unlockAllCards = payload.value === 'true';
+            return true;
+        }
+    });
+    await view.clock.advance(0);
+    view.id('settings').click();
+    await view.clock.advance(0);
+    const toggle = view.id('unlock-all-cards');
+    assert.equal(toggle.checked, false);
+    assert.equal(toggle.disabled, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new view.window.Event('change', { bubbles: true }));
+    await view.clock.advance(0);
+    assert.equal(unlockAllCards, true);
+    assert.equal(toggle.checked, true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new view.window.Event('change', { bubbles: true }));
+    await view.clock.advance(0);
+    assert.equal(unlockAllCards, false);
+    assert.equal(toggle.checked, false);
 });
 
 test('Play explains when preparation did not produce a usable cache', async () => {

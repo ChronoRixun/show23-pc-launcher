@@ -11,6 +11,7 @@
 #include "show23/input_paths.hpp"
 #include "show23/server_paths.hpp"
 #include "show23/player_name.hpp"
+#include "show23/profile_settings.hpp"
 #include "show23/shortcuts.hpp"
 #include "show23/unpacker.hpp"
 #include "updater/launcher_update.hpp"
@@ -305,6 +306,10 @@ namespace commands
                 response.AddMember("cardsOffered", utils::properties::load(property_keys::CARDS_OFFERED) == "true", a);
                 response.AddMember("resolution", json(std::string(saved_resolution().id), a), a);
                 response.AddMember("fullscreen", utils::properties::load(property_keys::FULLSCREEN) == "true", a);
+                const auto install = show23::install_folder();
+                const bool profile_ready = install && show23::profile_settings_available(*install);
+                response.AddMember("unlockAllCardsAvailable", profile_ready, a);
+                response.AddMember("unlockAllCards", profile_ready && show23::read_unlock_all_cards(*install), a);
                 response.AddMember("offline", utils::flags::has_flag("offline"), a);
                 response.AddMember("offlineSaved", utils::properties::load(property_keys::OFFLINE_MODE) == "true", a);
                 response.AddMember("portable", utils::properties::is_portable(), a);
@@ -339,6 +344,12 @@ namespace commands
                 }
                 else if (key == "fullscreen" && (value == "true" || value == "false"))
                     utils::properties::store(property_keys::FULLSCREEN, value);
+                else if (key == "unlockAllCards" && (value == "true" || value == "false"))
+                {
+                    const auto install = show23::install_folder();
+                    response.SetBool(install && show23::write_unlock_all_cards(*install, value == "true"));
+                    return;
+                }
                 else if (key == "offline" && (value == "true" || value == "false"))
                 {
                     utils::properties::store(property_keys::OFFLINE_MODE, value);

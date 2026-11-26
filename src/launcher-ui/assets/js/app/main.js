@@ -609,6 +609,8 @@
         resolution.value = Array.from(resolution.options).some(option => option.value === saved.resolution)
             ? saved.resolution : '1080p';
         $('fullscreen').checked = !!saved.fullscreen;
+        $('unlock-all-cards').checked = saved.unlockAllCards === true;
+        $('unlock-all-cards').disabled = saved.unlockAllCardsAvailable !== true;
         $('player-name').value = saved.playerName || '';
         $('offline-status').hidden = !saved.offline;
         $('check-parts').disabled = !!saved.offline || state.checking;
@@ -958,6 +960,12 @@
             finally { state.savingResolution = false; }
         });
         bind('fullscreen', 'change', () => save('fullscreen', String($('fullscreen').checked)));
+        bind('unlock-all-cards', 'change', async () => {
+            const toggle = $('unlock-all-cards');
+            toggle.disabled = true;
+            try { await save('unlockAllCards', String(toggle.checked)); }
+            finally { toggle.disabled = state.settings.unlockAllCardsAvailable !== true; }
+        });
         bind('offline', 'change', async () => {
             const enable = $('offline').checked;
             if (!await save('offline', String(enable)) || enable === !!state.settings.offline) return;
