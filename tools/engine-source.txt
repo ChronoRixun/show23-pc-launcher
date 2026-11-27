@@ -1,5 +1,5 @@
 The native game engine and its preparation scripts are distributed under the GNU General Public License, version 2 or (at your option) any later version. See GPL-2.0.txt.
 
-Corresponding source, patches, and build instructions: https://github.com/ChronoRixun/mlb_pc (branch show23, commit f27ab5fc7a0e8a1f8b6026a00ca6161cfba7f090)
+Corresponding source, patches, and build instructions: https://github.com/ChronoRixun/mlb_pc (branch show23, commit e4ac7c0d94d112f0c1749bf23beff032e66ded47)
 
 See DEPENDENCIES.tsv for each bundled library's licence and package provenance. The FFmpeg libraries in this release use the LGPL-2.1-or-later build.
